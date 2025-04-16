@@ -197,7 +197,7 @@ class VidSTGDataset(data.Dataset):
             'ori_size' : (h, w)
         }
 
-        indexes = np.array(self.sample_continuous_segments()).flatten()
+        indexes = np.array(self.sample_continuous_segments(total_frames=len(targets["frame_ids"]))).flatten()
         input_dict["frames"] = torch.from_numpy(np.array(input_dict["frames"])[indexes])
         targets["frame_ids"] = torch.from_numpy(np.array(targets["frame_ids"])[indexes])
         targets["actioness"] = torch.from_numpy(np.array(input_dict["actioness"])[indexes])
@@ -244,37 +244,42 @@ class VidSTGDataset(data.Dataset):
     (clips, boxes)
     """
 
-    def sample_continuous_segments(self, total_frames=64, frames_per_segment=16, num_segments=8):
+    def sample_continuous_segments(self, total_frames, frames_per_segment=16, num_segments=8):
+        if total_frames < frames_per_segment:
+            print(f"ERROR: Set of sampled frames contains {total_frames} frames but at least {frames_per_segment} frames are required per clip.")
+            exit(-1)
+        # frames_per_segment = min(total_frames, frames_per_segment)
         first_frame_index = 0
         last_frame_index = total_frames - 1
-        clip_indices = []
+        clip_indices = np.zeros(shape=(num_segments, frames_per_segment), dtype=int)
         for i in range(num_segments):
             start_index = np.random.randint(first_frame_index, last_frame_index)
-            end_index = start_index + frames_per_segment - 1
-            indices = np.linspace(start_index, end_index, num=frames_per_segment)
-            indices = np.clip(indices, start_index, total_frames-1).astype(np.int64)
-
-            clip_indices.append(indices)
+            indices = np.arange(
+                start_index, 
+                start_index + frames_per_segment
+            )
+            indices = np.clip(indices, first_frame_index, last_frame_index).astype(np.int64)
+            clip_indices[i] = indices
         return clip_indices
 
 
-    def make_boxes(self, frame_ids, gt_temp_bound, actioness, bboxs_in, width, height):
-        boxes = []
-        num_slots=8
-        for i in range(num_slots):
-            action_idx = np.where(actioness[i])[0]
-            if(action_idx.shape[0] < 1):
-                bboxs = BoxList(torch.zeros(shape=(0,4)), (width, height), 'xyxy')
-                continue
-            start_idx, end_idx = action_idx[0], action_idx[-1]
-            bbox_idx = [frame_ids[i][idx] - gt_temp_bound[0] for idx in range(start_idx,end_idx + 1)]
-            bboxs = torch.from_numpy(bboxs_in[bbox_idx]).reshape(-1, 4)
-            assert bboxs.shape[0] == len(action_idx)
+    # def make_boxes(self, frame_ids, gt_temp_bound, actioness, bboxs_in, width, height):
+    #     boxes = []
+    #     num_slots=8
+    #     for i in range(num_slots):
+    #         action_idx = np.where(actioness[i])[0]
+    #         if(action_idx.shape[0] < 1):
+    #             bboxs = BoxList(torch.zeros(shape=(0,4)), (width, height), 'xyxy')
+    #             continue
+    #         start_idx, end_idx = action_idx[0], action_idx[-1]
+    #         bbox_idx = [frame_ids[i][idx] - gt_temp_bound[0] for idx in range(start_idx,end_idx + 1)]
+    #         bboxs = torch.from_numpy(bboxs_in[bbox_idx]).reshape(-1, 4)
+    #         assert bboxs.shape[0] == len(action_idx)
 
-            w, h = width, height
-            bboxs = BoxList(bboxs, (width, height), 'xyxy')
-            boxes.append(bboxs)
-        return boxes
+    #         w, h = width, height
+    #         bboxs = BoxList(bboxs, (width, height), 'xyxy')
+    #         boxes.append(bboxs)
+    #     return boxes
 
 
     def __len__(self) -> int:
