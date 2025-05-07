@@ -21,6 +21,7 @@ def train(cfg, local_rank, distributed, logger):
     model, criteria, weight_dict = build_model(cfg)
     device = torch.device(cfg.MODEL.DEVICE)
     model.to(device)
+    model.device = device
     criteria.to(device)
 
     optimizer = make_optimizer(cfg, model, logger)
