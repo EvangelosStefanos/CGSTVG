@@ -6,6 +6,7 @@ services:
     volumes:
       - ./data:/app/data:ro
       - ./model_zoo:/app/model_zoo:ro
+      # - ./output/baseline/vidstg/model_125000.pth:/app/output/vidstg/model_125000.pth:ro
     ipc: host
     deploy:
       resources:

@@ -46,8 +46,8 @@ SOLVER:
   VIS_BACKBONE_LR: 1e-5
   TEMP_LR: 1e-4
   OPTIMIZER: adamw
-  VAL_PERIOD: 260000
-  CHECKPOINT_PERIOD: 25000
+  VAL_PERIOD: 40338 # 1 validation per vidstg epoch (2 gpus)
+  CHECKPOINT_PERIOD: 20169 # 2 checkpoints per vidstg epoch (2 gpus)
   SHUFFLE: True
   SCHEDULE:
     TYPE: multistep_with_warmup_all
