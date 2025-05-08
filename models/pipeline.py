@@ -16,7 +16,7 @@ from models.bert_model.bert_module import BertLayerNorm
 
 
 def modality_concatenation(self, feat_2d, feat_motion, feat_text):
-    frame_length = feat_2d.size()[0]
+    frame_length = feat_2d.size(0)
     feat_text = feat_text.expand(feat_text.size(0), frame_length, feat_text.size(-1))
     # concat visual and text features and Pad the vis_pos with 0 for the text tokens
     concat_features = torch.cat([feat_2d.permute(1,0,2), feat_text, feat_motion.permute(1,0,2)], dim=0)
@@ -25,7 +25,7 @@ def modality_concatenation(self, feat_2d, feat_motion, feat_text):
     videos_cls = torch.mean(frames_cls, dim=0)
     pos_query, content_query = self.pos_fc(frames_cls), self.time_fc(videos_cls)
     pos_query = pos_query.sigmoid()  # [n_frames, bs, 4]
-    content_query = content_query.expand(self.FRAMES_PER_SAMPLE, content_query.size(-1)).unsqueeze(1)  # [n_frames, bs, d_model]
+    content_query = content_query.expand(feat_2d.size(0), content_query.size(-1)).unsqueeze(1)  # [n_frames, bs, d_model]
     conf_query=self.conf(pos_query).sigmoid().squeeze()
     return pos_query, content_query, conf_query
 
@@ -202,14 +202,18 @@ class CGSTVG(nn.Module):
             ##decoder masks
             tgt_mask_visual=nn.Transformer.generate_square_subsequent_mask(tgt.size(0)).to(self.device)
             if nframes_required>0:
-                memory_key_padding_mask = torch.ones(self.B, tgt.size(0)).byte()
+                memory_key_padding_mask = torch.ones(self.B, tgt.size(0)).byte().to(self.device)
                 memory_key_padding_mask[:,:tgt.size(0)-nframes_required]=False
             else:
-                memory_key_padding_mask = torch.zeros(self.B, tgt.size(0)).byte()
+                memory_key_padding_mask = torch.zeros(self.B, tgt.size(0)).byte().to(self.device)
 
             ###visual decoding
-            output_motion=self.decoder_motion(tgt+tgt_pos,mask_motion+encoder_pos_motion, tgt_mask=tgt_mask_visual, memory_key_padding_mask=memory_key_padding_mask)
-            output_2d = self.decoder_2d(tgt+tgt_pos, mask_rgb+encoder_pos_rgb, tgt_mask=tgt_mask_visual)
+            output_motion_padded=self.decoder_motion(tgt+tgt_pos,mask_motion+encoder_pos_motion, tgt_mask=tgt_mask_visual, memory_key_padding_mask=memory_key_padding_mask.bool())
+            output_2d_padded = self.decoder_2d(tgt+tgt_pos, mask_rgb+encoder_pos_rgb, tgt_mask=tgt_mask_visual)
+
+            ###keep unpadded tensors
+            output_motion=output_motion_padded[:tgt.size(0)-nframes_required,:,:]
+            output_2d = output_2d_padded[:tgt.size(0) - nframes_required, :, :]
 
 
             # Textual Feature
@@ -240,8 +244,8 @@ class CGSTVG(nn.Module):
             pos_query, time_query, conf_query = modality_concatenation(self, output_2d, output_motion, output_text)
             
             NUM_LAYERS = 1
-            pos_query = pos_query.reshape(shape=(NUM_LAYERS, self.FRAMES_PER_SAMPLE, 4)) # [FRAMES_PER_SAMPLE, 4] -> [NUM_LAYERS, FRAMES_PER_SAMPLE, 4]
-            conf_query = conf_query.reshape(shape=(NUM_LAYERS, self.FRAMES_PER_SAMPLE)) # [FRAMES_PER_SAMPLE] -> [NUM_LAYERS, FRAMES_PER_SAMPLE]
+            pos_query = pos_query.reshape(shape=(NUM_LAYERS, pos_query.size(0), 4)) # [FRAMES_PER_SAMPLE, 4] -> [NUM_LAYERS, FRAMES_PER_SAMPLE, 4]
+            conf_query = conf_query.reshape(shape=(NUM_LAYERS, conf_query.size(0))) # [FRAMES_PER_SAMPLE] -> [NUM_LAYERS, FRAMES_PER_SAMPLE]
 
             out = {}
 
@@ -257,12 +261,12 @@ class CGSTVG(nn.Module):
             time_hiden_state = time_query
             outputs_time = self.temp_embed(time_hiden_state)  # [num_layers, b, T, 2]
             outputs_time = outputs_time.permute(dims=(1,0,2))
-            outputs_time = outputs_time.reshape(shape=(NUM_LAYERS, self.B, self.FRAMES_PER_SAMPLE, 2)) # [B, FRAMES_PER_SAMPLE, 2] -> [NUM_LAYERS, B, FRAMES_PER_SAMPLE, 2]
+            outputs_time = outputs_time.reshape(shape=(NUM_LAYERS, self.B, time_query.size(0), 2)) # [B, FRAMES_PER_SAMPLE, 2] -> [NUM_LAYERS, B, FRAMES_PER_SAMPLE, 2]
             out.update({"pred_sted": outputs_time[-1]})
             #######################################################
 
             if self.use_actioness:
-                outputs_actioness = self.action_embed(time_hiden_state).reshape(shape=(-1, self.B, self.FRAMES_PER_SAMPLE, 1))  # [num_layers, b, FRAMES_PER_SAMPLE, 1]
+                outputs_actioness = self.action_embed(time_hiden_state).reshape(shape=(-1, self.B, time_query.size(0), 1))  # [num_layers, b, FRAMES_PER_SAMPLE, 1]
                 out.update({"pred_actioness": outputs_actioness[-1]})
 
             if self.use_aux_loss:
