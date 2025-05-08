@@ -156,6 +156,8 @@ class CGSTVG(nn.Module):
             frame_ids = torch.cat(tensors=(frame_ids, pad), dim=0)
             print(videos.tensors.shape, frame_ids.shape)
 
+
+
         clips = videos.tensors.reshape(shape=(self.B, self.NCLIPS, self.VIEWS_PER_CLIP, self.FRAMES_PER_CLIP, C, H, W))
         clips = clips.permute(dims=(1, 2, 0, 4, 3, 5, 6)) # [B, CLIPS, VIEWS, FRAMES_PER_CLIP, C, H, W] -> [CLIPS, VIEWS, B, C, FRAMES_PER_CLIP, H, W]
         clip_indices = torch.reshape(frame_ids, (self.NCLIPS, self.FRAMES_PER_CLIP)) # TODO: add support for batch size > 1
@@ -197,10 +199,17 @@ class CGSTVG(nn.Module):
             tgt = torch.zeros(self.FRAMES_PER_SAMPLE, self.B, self.d_model).to(self.device)
             tgt_pos = self.tgt_embed(self.FRAMES_PER_SAMPLE).to(self.device)
 
+            ##decoder masks
+            tgt_mask_visual=nn.Transformer.generate_square_subsequent_mask(tgt.size(0)).to(self.device)
+            if nframes_required>0:
+                memory_key_padding_mask = torch.ones(self.B, tgt.size(0)).byte()
+                memory_key_padding_mask[:,:tgt.size(0)-nframes_required]=False
+            else:
+                memory_key_padding_mask = torch.zeros(self.B, tgt.size(0)).byte()
 
             ###visual decoding
-            output_motion=self.decoder_motion(tgt+tgt_pos,mask_motion+encoder_pos_motion)
-            output_2d = self.decoder_2d(tgt+tgt_pos, mask_rgb+encoder_pos_rgb)
+            output_motion=self.decoder_motion(tgt+tgt_pos,mask_motion+encoder_pos_motion, tgt_mask=tgt_mask_visual, memory_key_padding_mask=memory_key_padding_mask)
+            output_2d = self.decoder_2d(tgt+tgt_pos, mask_rgb+encoder_pos_rgb, tgt_mask=tgt_mask_visual)
 
 
             # Textual Feature
@@ -221,7 +230,12 @@ class CGSTVG(nn.Module):
             ####tgt input and positional encoding
             tgt_text = torch.zeros(mask_text.size()[0], self.B, self.d_model).to(self.device)
             tgt_pos_text = self.tgt_embed(mask_text.size()[0]).to(self.device)
-            output_text = self.decoder_text(tgt_text+tgt_pos_text,mask_text+encoder_pos_text)
+
+            ##decoder masks
+            tgt_mask_textual = nn.Transformer.generate_square_subsequent_mask(tgt_text.size(0)).to(self.device)
+
+            ##textual decoder
+            output_text = self.decoder_text(tgt_text+tgt_pos_text,mask_text+encoder_pos_text, tgt_mask=tgt_mask_textual)
 
             pos_query, time_query, conf_query = modality_concatenation(self, output_2d, output_motion, output_text)
             
