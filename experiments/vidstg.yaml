@@ -3,7 +3,7 @@ DATA_DIR: data/vidstg/
 TENSORBOARD_DIR: output/vidstg/checkpoints/tensorboard/
 
 INPUT:
-  RESOLUTION: 100
+  RESOLUTION: 224
   FLIP_PROB_TRAIN: 0.7
   TEMP_CROP_PROB: 0.5
   TRAIN_SAMPLE_NUM: 128
@@ -47,7 +47,7 @@ SOLVER:
   TEMP_LR: 1e-4
   OPTIMIZER: adamw
   VAL_PERIOD: 40338 # 1 validation per vidstg epoch (2 gpus)
-  CHECKPOINT_PERIOD: 20169 # 2 checkpoints per vidstg epoch (2 gpus)
+  CHECKPOINT_PERIOD: 40338 # 1 checkpoint per vidstg epoch (2 gpus)
   SHUFFLE: True
   SCHEDULE:
     TYPE: multistep_with_warmup_all

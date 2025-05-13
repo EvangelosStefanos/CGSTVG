@@ -8,6 +8,8 @@ import torch
 from functools import reduce
 from utils.box_utils import np_box_iou
 import json
+import pandas as pd
+
 
 def save_json(path, data):
     with open(path, "w") as f:
@@ -216,7 +218,15 @@ class VidSTGEvaluator(object):
                     metrics[category][f"viou@{thresh}"] = 0
                     metrics[category][f"gt_viou@{thresh}"] = 0
                 counter[category] = 0
-
+                
+            metric_names = ["tiou", "viou", "viou@0.3", "viou@0.5", "gt_viou", "gt_viou@0.3", "gt_viou@0.5"]
+            stats = pd.DataFrame(self.results).T
+            stds = {
+                "declar" : stats[stats["qtype"] == "declar"][metric_names].std(),
+                "inter" : stats[stats["qtype"] == "inter"][metric_names].std(),
+            }
+            
+            
             for x in self.results.values():  # sum results
                 qtype = x["qtype"]
                 metrics[qtype]["tiou"] += x["tiou"]
@@ -232,7 +242,7 @@ class VidSTGEvaluator(object):
             for category in categories:  # average results per category
                 for key in metrics[qtype]:
                     metrics[category][key] = metrics[category][key] / counter[category]
-                    result_str += f"{category} {key}: {metrics[category][key]:.4f}" + '\n'
+                    result_str += f"{category} {key}: {metrics[category][key]:.4f} +- {stds[category][key]:.4f}" + '\n'
 
             result_str += '=' * 100 + '\n'
             self.logger.info(result_str)

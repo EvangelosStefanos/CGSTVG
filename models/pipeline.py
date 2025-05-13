@@ -79,7 +79,7 @@ class CGSTVG(nn.Module):
             encoder=self.vjepa_encoder,
             video_data=True,
             checkpoint_path="model_zoo/vjepa/probes/k400-probe.pth.tar",
-            frozen=True,
+            frozen=False,
         )
 
         self.vjepa_classifier_2d = build_vjepa_classifier(
@@ -87,7 +87,7 @@ class CGSTVG(nn.Module):
             encoder=self.vjepa_encoder,
             video_data=False,
             checkpoint_path="model_zoo/vjepa/probes/in1k-probe.pth.tar",
-            frozen=True,
+            frozen=False,
         )
 
         self.NCLIPS = 8
