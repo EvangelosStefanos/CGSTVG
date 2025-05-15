@@ -93,6 +93,15 @@ class CGSTVG(nn.Module):
             frozen=True,
         )
 
+        if self.cfg.MODEL.TEMPORAL_BRANCH=='a':
+            self.vjepa_classifier_temporal = build_vjepa_classifier(
+                config=self.vjepa_config,
+                encoder=self.vjepa_encoder,
+                video_data=True,
+                checkpoint_path="model_zoo/vjepa/probes/k400-probe.pth.tar",
+                frozen=True,
+            )
+
         self.NCLIPS = 8
         self.VIEWS_PER_CLIP = 1
         self.FRAMES_PER_SAMPLE = 128
@@ -104,6 +113,13 @@ class CGSTVG(nn.Module):
                                 dropout=0.3)
         self.rgb_embed = MLP(1, (self.NCLIPS * self.FRAMES_PER_CLIP) // 2, self.NCLIPS * self.FRAMES_PER_CLIP, 2,
                              dropout=0.3)
+
+        ##temporal embed
+        if self.cfg.MODEL.TEMPORAL_BRANCH == 'a':
+            self.temporal_embed = MLP(1, (self.NCLIPS * self.FRAMES_PER_CLIP) // 2, self.NCLIPS * self.FRAMES_PER_CLIP, 2,
+                                    dropout=0.3)
+        self.mask_temporal_embed = nn.Linear(self.vjepa_config.num_classes_vid, hidden_dim, bias=True)
+
 
         self.mask_motion_embed = nn.Linear(self.vjepa_config.num_classes_vid, hidden_dim, bias=True)
         self.mask_rgb_embed = nn.Linear(self.vjepa_config.num_classes_img, hidden_dim, bias=True)
@@ -117,6 +133,13 @@ class CGSTVG(nn.Module):
 
         decoder_layer_text = nn.TransformerDecoderLayer(d_model=hidden_dim, nhead=cfg.MODEL.CG.HEADS)
         self.decoder_text = nn.TransformerDecoder(decoder_layer_text, num_layers=cfg.MODEL.CG.DEC_LAYERS // 3)
+
+
+        ##temporal decoder
+        if self.cfg.MODEL.TEMPORAL_BRANCH == 'a':
+            decoder_layer_temporal = nn.TransformerDecoderLayer(d_model=hidden_dim, nhead=cfg.MODEL.CG.HEADS)
+            self.decoder_temporal = nn.TransformerDecoder(decoder_layer_temporal, num_layers=cfg.MODEL.CG.DEC_LAYERS // 3)
+
 
         self.pos_fc = nn.Sequential(
             BertLayerNorm(256, eps=1e-12),
@@ -170,9 +193,13 @@ class CGSTVG(nn.Module):
                 if self.vjepa_config.attend_across_segments:
                     outputs_motion = [self.vjepa_classifier_motion(o) for o in vjepa_features]
                     outputs_2d = [self.vjepa_classifier_2d(o) for o in vjepa_features]
+                    if self.cfg.MODEL.TEMPORAL_BRANCH == 'a':
+                        outputs_temporal = [self.vjepa_classifier_temporal(o) for o in vjepa_features]
                 else:
                     outputs_motion = [[self.vjepa_classifier_motion(ost) for ost in os] for os in vjepa_features]
                     outputs_2d = [[self.vjepa_classifier_2d(ost) for ost in os] for os in vjepa_features]
+                    if self.cfg.MODEL.TEMPORAL_BRANCH=='a':
+                        outputs_temporal = [[self.vjepa_classifier_temporal(ost) for ost in os] for os in vjepa_features]
 
             ###mask decoder features
             mask_motion = self.motion_embed(torch.permute(outputs_motion[0], (1, 0)))
@@ -182,8 +209,16 @@ class CGSTVG(nn.Module):
             mask_motion = self.mask_motion_embed(mask_motion)
             mask_rgb = self.mask_rgb_embed(mask_rgb)
 
+            #temporal mask decoder features
+            if self.cfg.MODEL.TEMPORAL_BRANCH == 'a':
+                mask_temporal = self.temporal_embed(torch.permute(outputs_temporal[0], (1, 0)))
+                mask_temporal = torch.unsqueeze(torch.permute(mask_temporal, (1, 0)), 1)
+                mask_temporal = self.mask_motion_embed(mask_temporal)
+
             ####positional embedding backbone
             position_embedding = build_position_encoding(self.cfg)
+
+
             ###mask position embeddings
             motion_pos = torch.unsqueeze(torch.permute(mask_motion, (0, 2, 1)), -1)
             rgb_pos = torch.unsqueeze(torch.permute(mask_rgb, (0, 2, 1)), -1)
@@ -193,6 +228,18 @@ class CGSTVG(nn.Module):
             encoder_pos_rgb = position_embedding(rgb_pos, mask_pos)
             encoder_pos_motion = torch.squeeze(torch.permute(encoder_pos_motion, (0, 2, 1, 3)), 3)
             encoder_pos_rgb = torch.squeeze(torch.permute(encoder_pos_rgb, (0, 2, 1, 3)), 3)
+
+            ###temporal mask position embeddings
+            if self.cfg.MODEL.TEMPORAL_BRANCH == 'a':
+                temporal_pos = torch.unsqueeze(torch.permute(mask_temporal, (0, 2, 1)), -1)
+                encoder_pos_temporal = position_embedding(temporal_pos, mask_pos)
+                encoder_pos_temporal = torch.squeeze(torch.permute(encoder_pos_temporal, (0, 2, 1, 3)), 3)
+
+
+
+
+
+
 
             ####tgt input and positional encoding
             tgt = torch.zeros(self.FRAMES_PER_SAMPLE, self.B, self.d_model).to(self.device)
@@ -210,7 +257,17 @@ class CGSTVG(nn.Module):
             output_motion_padded = self.decoder_motion(tgt + tgt_pos, mask_motion + encoder_pos_motion,
                                                        tgt_mask=tgt_mask_visual,
                                                        memory_key_padding_mask=memory_key_padding_mask.bool())
-            output_2d_padded = self.decoder_2d(tgt + tgt_pos, mask_rgb + encoder_pos_rgb, tgt_mask=tgt_mask_visual)
+            output_2d_padded = self.decoder_2d(tgt + tgt_pos, mask_rgb + encoder_pos_rgb, tgt_mask=tgt_mask_visual,
+                                               memory_key_padding_mask=memory_key_padding_mask.bool())
+
+            ##temporal decoding
+            if self.cfg.MODEL.TEMPORAL_BRANCH == 'a':
+                output_temporal_padded = self.decoder_motion(tgt + tgt_pos, mask_temporal + encoder_pos_temporal,
+                                                       tgt_mask=tgt_mask_visual,
+                                                       memory_key_padding_mask=memory_key_padding_mask.bool())
+
+            output_temporal = output_temporal_padded[:tgt.size(0) - nframes_required, :, :]
+
 
             ###keep unpadded tensors
             output_motion = output_motion_padded[:tgt.size(0) - nframes_required, :, :]
