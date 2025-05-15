@@ -3,7 +3,7 @@ DATA_DIR: data/vidstg/
 TENSORBOARD_DIR: output/vidstg/checkpoints/tensorboard/
 
 INPUT:
-  RESOLUTION: 100
+  RESOLUTION: 420
   FLIP_PROB_TRAIN: 0.7
   TEMP_CROP_PROB: 0.5
   TRAIN_SAMPLE_NUM: 128
