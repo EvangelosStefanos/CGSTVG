@@ -13,6 +13,8 @@ import torch
 from models.vision_model.position_encoding import build_position_encoding
 from models.grounding_model.position_encoding import SeqEmbeddingLearned, SeqEmbeddingSine
 from models.bert_model.bert_module import BertLayerNorm
+from sklearn.manifold import TSNE
+import matplotlib.pyplot as plt
 
 
 def modality_concatenation(self, feat_2d, feat_motion, feat_text):
@@ -20,6 +22,30 @@ def modality_concatenation(self, feat_2d, feat_motion, feat_text):
     feat_text = feat_text.expand(feat_text.size(0), frame_length, feat_text.size(-1))
     # concat visual and text features and Pad the vis_pos with 0 for the text tokens
     concat_features = torch.cat([feat_2d.permute(1,0,2), feat_text, feat_motion.permute(1,0,2)], dim=0)
+
+    # TSNE START #
+    if self.steps % 40338 < 10:
+        with torch.no_grad():
+            W, T, E = feat_text.shape
+            X = concat_features.reshape(shape=((W+2)*T, E)).detach().cpu()
+            (fig, subplots) = plt.subplots(2, 2, figsize=(19.2, 10.8), subplot_kw=dict(projection='3d'), layout="constrained")
+            perplexities = [5, 30, 50, 100]
+            for i, ax in enumerate(subplots.flat):
+                tsne = TSNE(
+                    n_components=3,
+                    init="random",
+                    random_state=0,
+                    perplexity=perplexities[i],
+                    max_iter=300,
+                )
+                Y = tsne.fit_transform(X)
+                ax.set_title("Perplexity=%d" % perplexities[i])
+                ax.scatter(Y[:, 0], Y[:, 1], Y[:, 2])
+            fig.savefig(f"output/vidstg/tsne_{self.steps}.png")
+            plt.close(fig)
+    self.steps += 1
+    # TSNE STOP #
+
     #vis_pos = torch.cat([pos_motion, torch.zeros_like(text_features), pos_rgb], dim=0)
     frames_cls = torch.mean(concat_features, dim=0)
     videos_cls = torch.mean(frames_cls, dim=0)
@@ -95,6 +121,7 @@ class CGSTVG(nn.Module):
         self.FRAMES_PER_SAMPLE = 128
         self.FRAMES_PER_CLIP = self.FRAMES_PER_SAMPLE // self.NCLIPS
         self.B = 1
+        self.steps = 0
 
         ###embeds
         self.motion_embed = MLP(1, (self.NCLIPS * self.FRAMES_PER_CLIP) // 2, self.NCLIPS * self.FRAMES_PER_CLIP, 2,dropout=0.3)

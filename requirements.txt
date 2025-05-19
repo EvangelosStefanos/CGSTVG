@@ -17,3 +17,4 @@ easydict
 einops
 matplotlib
 pandas
+scikit-learn
