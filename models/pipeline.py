@@ -15,14 +15,20 @@ from models.grounding_model.position_encoding import SeqEmbeddingLearned, SeqEmb
 from models.bert_model.bert_module import BertLayerNorm
 
 
-def modality_concatenation(self, feat_2d, feat_motion, feat_text):
+def modality_concatenation(self, feat_2d, feat_motion, feat_text, feat_temporal):
     frame_length = feat_2d.size(0)
     feat_text = feat_text.expand(feat_text.size(0), frame_length, feat_text.size(-1))
     # concat visual and text features and Pad the vis_pos with 0 for the text tokens
     concat_features = torch.cat([feat_2d.permute(1, 0, 2), feat_text, feat_motion.permute(1, 0, 2)], dim=0)
     # vis_pos = torch.cat([pos_motion, torch.zeros_like(text_features), pos_rgb], dim=0)
     frames_cls = torch.mean(concat_features, dim=0)
-    videos_cls = torch.mean(frames_cls, dim=0)
+
+    if self.cfg.MODEL.TEMPORAL_BRANCH == 'a':
+        videos_cls=torch.mean(feat_temporal, dim=0).squeeze()
+    else:
+        videos_cls = torch.mean(frames_cls, dim=0)
+
+
     pos_query, content_query = self.pos_fc(frames_cls), self.time_fc(videos_cls)
     pos_query = pos_query.sigmoid()  # [n_frames, bs, 4]
     content_query = content_query.expand(feat_2d.size(0), content_query.size(-1)).unsqueeze(
@@ -266,7 +272,7 @@ class CGSTVG(nn.Module):
                                                        tgt_mask=tgt_mask_visual,
                                                        memory_key_padding_mask=memory_key_padding_mask.bool())
 
-            output_temporal = output_temporal_padded[:tgt.size(0) - nframes_required, :, :]
+                output_temporal = output_temporal_padded[:tgt.size(0) - nframes_required, :, :]
 
 
             ###keep unpadded tensors
@@ -299,7 +305,12 @@ class CGSTVG(nn.Module):
             output_text = self.decoder_text(tgt_text + tgt_pos_text, mask_text + encoder_pos_text,
                                             tgt_mask=tgt_mask_textual)
 
-            pos_query, time_query, conf_query = modality_concatenation(self, output_2d, output_motion, output_text)
+            if self.cfg.MODEL.TEMPORAL_BRANCH == 'a':
+                pos_query, time_query, conf_query = modality_concatenation(self, output_2d, output_motion, output_text, output_temporal)
+            else:
+                output_temporal=0
+                pos_query, time_query, conf_query = modality_concatenation(self, output_2d, output_motion, output_text,output_temporal)
+
 
             NUM_LAYERS = 1
             pos_query = pos_query.reshape(shape=(
