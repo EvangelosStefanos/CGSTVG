@@ -17,3 +17,4 @@ easydict
 einops
 matplotlib
 pandas
+torch==2.0.1
