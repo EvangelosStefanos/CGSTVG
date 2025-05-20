@@ -15,3 +15,4 @@ packaging==21.3
 ftfy
 easydict
 einops
+pandas

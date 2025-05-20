@@ -78,7 +78,7 @@ def single_forward(cfg, model, videos, texts, targets, device, postprocessor):
     
 
 @torch.no_grad()
-def do_eval(cfg, mode, logger, model, postprocessor, data_loader, evaluator, device):
+def do_eval(cfg, mode, logger, model, postprocessor, data_loader, evaluator, device, writer, iteration):
     """
     Video Spatial-Temporal Grounding Evaluation
     """
@@ -131,5 +131,5 @@ def do_eval(cfg, mode, logger, model, postprocessor, data_loader, evaluator, dev
     if is_main_process():
         logger.info(f"Complete the inference on {mode} split of {cfg.DATASET.NAME}")
     
-    res = evaluator.summarize()
+    res = evaluator.summarize(writer, iteration)
     return res

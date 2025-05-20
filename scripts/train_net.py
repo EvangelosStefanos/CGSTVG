@@ -185,7 +185,7 @@ def train(cfg, local_rank, distributed, logger):
             checkpointer.save("model_final", **arguments)
 
         if cfg.SOLVER.TO_VAL and iteration % cfg.SOLVER.VAL_PERIOD == 0:
-            run_eval(cfg, model, model_ema, logger, val_data_loader, device)
+            run_eval(cfg, model, model_ema, logger, val_data_loader, device, writer=writer, iteration=iteration)
 
     total_training_time = time.time() - start_training_time
     total_time_str = str(datetime.timedelta(seconds=total_training_time))
@@ -200,7 +200,7 @@ def train(cfg, local_rank, distributed, logger):
     return model, model_ema
 
 
-def run_eval(cfg, model, model_ema, logger, val_data_loader, device):
+def run_eval(cfg, model, model_ema, logger, val_data_loader, device, writer, iteration):
     logger.info("Start validating")
     test_model = model_ema if model_ema is not None else model
     evaluator = build_evaluator(cfg, logger, mode='val' \
@@ -215,7 +215,9 @@ def run_eval(cfg, model, model_ema, logger, val_data_loader, device):
         postprocessor=postprocessor,
         data_loader=val_data_loader,
         evaluator=evaluator,
-        device=device
+        device=device,
+        writer=writer,
+        iteration=iteration,
     )
     synchronize()
 
