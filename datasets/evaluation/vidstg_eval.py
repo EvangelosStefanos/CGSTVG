@@ -8,6 +8,7 @@ import torch
 from functools import reduce
 from utils.box_utils import np_box_iou
 import json
+import pandas as pd
 
 def save_json(path, data):
     with open(path, "w") as f:
@@ -199,7 +200,7 @@ class VidSTGEvaluator(object):
         all_video_predictions = all_gather(self.video_predictions)
         self.video_predictions = reduce(lambda a, b: a.update(b) or a, all_video_predictions, {})
 
-    def summarize(self):
+    def summarize(self, writer, iteration):
         if is_main_process():
             self.logger.info("#######  Start Calculating the metrics  ########")
             self.results, vid2names, vid2sents = self.evaluator.evaluate(
@@ -216,7 +217,18 @@ class VidSTGEvaluator(object):
                     metrics[category][f"viou@{thresh}"] = 0
                     metrics[category][f"gt_viou@{thresh}"] = 0
                 counter[category] = 0
-
+                
+            metric_names = ["tiou", "viou", "viou@0.3", "viou@0.5", "gt_viou", "gt_viou@0.3", "gt_viou@0.5"]
+            stats = pd.DataFrame(self.results).T
+            stds = {
+                "declar" : stats[stats["qtype"] == "declar"][metric_names].std(),
+                "inter" : stats[stats["qtype"] == "inter"][metric_names].std(),
+            }            
+            means = {
+                "declar" : stats[stats["qtype"] == "declar"][metric_names].mean(),
+                "inter" : stats[stats["qtype"] == "inter"][metric_names].mean(),
+            }            
+            
             for x in self.results.values():  # sum results
                 qtype = x["qtype"]
                 metrics[qtype]["tiou"] += x["tiou"]
@@ -233,9 +245,15 @@ class VidSTGEvaluator(object):
                 for key in metrics[qtype]:
                     metrics[category][key] = metrics[category][key] / counter[category]
                     result_str += f"{category} {key}: {metrics[category][key]:.4f}" + '\n'
+                    if writer is not None:
+                        writer.add_scalar(f"mean/{category}/{key}", metrics[category][key], iteration)
+                        writer.add_scalar(f"std/{category}/{key}", stds[category][key], iteration)
+                        
 
             result_str += '=' * 100 + '\n'
             self.logger.info(result_str)
+            self.logger.info(str(means.T) + '\n')
+            self.logger.info(str(stds.T) + '\n')
             
             out = {
                 f"{qtype}_{name}": metrics[qtype][name]
