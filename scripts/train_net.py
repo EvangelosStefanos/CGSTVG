@@ -15,6 +15,8 @@ from models import build_model, build_postprocessors
 from engine import make_optimizer, adjust_learning_rate, update_ema, do_eval
 from utils.metric_logger import MetricLogger
 from torch.utils.tensorboard import SummaryWriter
+import matplotlib.pyplot as plt
+import matplotlib.patches as patches
 
 
 def train(cfg, local_rank, distributed, logger):
@@ -108,6 +110,35 @@ def train(cfg, local_rank, distributed, logger):
         targets = to_device(batch_dict["targets"], device) 
         targets[0]["durations"] = durations
         outputs = model(videos, texts, targets, iteration/max_iter)
+        
+        if iteration % 40338 < 10:
+            with torch.no_grad():
+                action_idx = torch.where(targets[0]["actioness"])[0][:8].cpu()
+                v = videos.tensors.permute((0, 2, 3, 1))[action_idx].cpu() # T C H W >> T H W C
+                target_bboxs = targets[0]["boxs"].bbox[:8].detach().cpu()
+                predicted_bboxs = outputs["pred_boxes"][action_idx].detach().cpu()
+                fig, axes = plt.subplots(2, 4, figsize=(19.2, 10.8), layout="constrained")
+                for i, ax in enumerate(axes.flat):
+                    if i == len(v):
+                        break
+                    def norm(x):
+                        return (x+2.117904)/4.757904
+                    # normalizedv = (v[i]+2.117904)/4.757904
+                    ax.imshow(norm(v[i]))
+                    ax.set_title(texts[0])
+                    
+                    x, y, width, height = target_bboxs[i]*255
+                    patch = patches.Rectangle((x-(width/2), y-(height/2)), width, height, linewidth=2, edgecolor='red', facecolor='none')
+                    ax.add_patch(patch) # target bbox
+                    ax.text(x, y - 5, 'Real', color='red')
+                    
+                    x, y, width, height = predicted_bboxs[i]*255
+                    patch = patches.Rectangle((x-(width/2), y-(height/2)), width, height, linewidth=2, edgecolor='blue', facecolor='none')
+                    ax.add_patch(patch) # predicted bbox
+                    ax.text(x, y - 5, 'Pred', color='blue')
+
+                fig.savefig(f"output/vidstg/step_{iteration}.png")
+                plt.close(fig)
 
         # compute loss
         loss_dict = criteria(outputs, targets, durations)
