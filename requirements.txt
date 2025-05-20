@@ -18,3 +18,4 @@ einops
 matplotlib
 pandas
 scikit-learn
+torch==2.0.1

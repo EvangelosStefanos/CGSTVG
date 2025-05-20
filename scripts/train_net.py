@@ -113,8 +113,8 @@ def train(cfg, local_rank, distributed, logger):
         
         if iteration % 40338 < 10:
             with torch.no_grad():
-                action_idx = torch.where(targets[0]["actioness"])[0][:8].cpu()
-                v = videos.tensors.permute((0, 2, 3, 1))[action_idx].cpu() # T C H W >> T H W C
+                action_idx = torch.where(targets[0]["actioness"])[0][:8].detach().cpu()
+                v = videos.tensors.permute((0, 2, 3, 1))[action_idx].detach().cpu() # T C H W >> T H W C
                 target_bboxs = targets[0]["boxs"].bbox[:8].detach().cpu()
                 predicted_bboxs = outputs["pred_boxes"][action_idx].detach().cpu()
                 fig, axes = plt.subplots(2, 4, figsize=(19.2, 10.8), layout="constrained")
@@ -122,7 +122,7 @@ def train(cfg, local_rank, distributed, logger):
                     if i == len(v):
                         break
                     def norm(x):
-                        return (x+2.117904)/4.757904
+                        return (x+2.117904)/4.758
                     # normalizedv = (v[i]+2.117904)/4.757904
                     ax.imshow(norm(v[i]))
                     ax.set_title(texts[0])
