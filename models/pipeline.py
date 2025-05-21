@@ -99,13 +99,14 @@ class CGSTVG(nn.Module):
         if self.vjepa_config.use_bfloat16 == True:
             raise ValueError("bfloat16 is not supported.")
         self.vjepa_encoder = build_vjepa_encoder(self.vjepa_config)
+        self.FROZEN = True
 
         self.vjepa_classifier_motion = build_vjepa_classifier(
             config=self.vjepa_config,
             encoder=self.vjepa_encoder,
             video_data=True,
             checkpoint_path="model_zoo/vjepa/probes/k400-probe.pth.tar",
-            frozen=True,
+            frozen=self.FROZEN,
         )
 
         self.vjepa_classifier_2d = build_vjepa_classifier(
@@ -113,7 +114,7 @@ class CGSTVG(nn.Module):
             encoder=self.vjepa_encoder,
             video_data=False,
             checkpoint_path="model_zoo/vjepa/probes/in1k-probe.pth.tar",
-            frozen=True,
+            frozen=self.FROZEN,
         )
 
         self.NCLIPS = 8
@@ -188,6 +189,16 @@ class CGSTVG(nn.Module):
         with torch.cuda.amp.autocast(dtype=torch.float16, enabled=self.vjepa_config.use_bfloat16):
             with torch.no_grad():
                 vjepa_features = self.vjepa_encoder(clips, clip_indices)
+
+            if self.FROZEN:
+                with torch.no_grad():            
+                    if self.vjepa_config.attend_across_segments:
+                        outputs_motion = [self.vjepa_classifier_motion(o) for o in vjepa_features]
+                        outputs_2d = [self.vjepa_classifier_2d(o) for o in vjepa_features]
+                    else:
+                        outputs_motion = [[self.vjepa_classifier_motion(ost) for ost in os] for os in vjepa_features]
+                        outputs_2d = [[self.vjepa_classifier_2d(ost) for ost in os] for os in vjepa_features]
+            else:
                 if self.vjepa_config.attend_across_segments:
                     outputs_motion = [self.vjepa_classifier_motion(o) for o in vjepa_features]
                     outputs_2d = [self.vjepa_classifier_2d(o) for o in vjepa_features]
