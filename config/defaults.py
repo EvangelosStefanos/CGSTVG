@@ -46,6 +46,7 @@ _C.INPUT.TEMP_CROP_PROB = 0.5
 _C.MODEL = CN()
 _C.MODEL.DEVICE = "cuda"
 _C.MODEL.WEIGHT = ""
+_C.MODEL.TEMPORAL_BRANCH = None
 _C.MODEL.EMA = True
 _C.MODEL.EMA_DECAY = 0.9998
 _C.MODEL.QUERY_NUM = 1   # each frame a single query
