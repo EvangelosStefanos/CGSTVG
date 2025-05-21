@@ -217,18 +217,6 @@ class VidSTGEvaluator(object):
                     metrics[category][f"viou@{thresh}"] = 0
                     metrics[category][f"gt_viou@{thresh}"] = 0
                 counter[category] = 0
-                
-            metric_names = ["tiou", "viou", "viou@0.3", "viou@0.5", "gt_viou", "gt_viou@0.3", "gt_viou@0.5"]
-            stats = pd.DataFrame(self.results).T
-            stds = {
-                "declar" : stats[stats["qtype"] == "declar"][metric_names].std(),
-                "inter" : stats[stats["qtype"] == "inter"][metric_names].std(),
-            }            
-            means = {
-                "declar" : stats[stats["qtype"] == "declar"][metric_names].mean(),
-                "inter" : stats[stats["qtype"] == "inter"][metric_names].mean(),
-            }            
-            
             for x in self.results.values():  # sum results
                 qtype = x["qtype"]
                 metrics[qtype]["tiou"] += x["tiou"]
@@ -238,6 +226,13 @@ class VidSTGEvaluator(object):
                     metrics[qtype][f"viou@{thresh}"] += x[f"viou@{thresh}"]
                     metrics[qtype][f"gt_viou@{thresh}"] += x[f"gt_viou@{thresh}"]
                 counter[qtype] += 1
+                
+            metric_names = ["tiou", "viou", "viou@0.3", "viou@0.5", "gt_viou", "gt_viou@0.3", "gt_viou@0.5"]
+            stats = pd.DataFrame(self.results).T
+            stds = {
+                "declar" : stats[stats["qtype"] == "declar"][metric_names].std(),
+                "inter" : stats[stats["qtype"] == "inter"][metric_names].std(),
+            }
 
             result_str = ''
             result_str += '\n' + '=' * 100 + '\n'
@@ -246,14 +241,12 @@ class VidSTGEvaluator(object):
                     metrics[category][key] = metrics[category][key] / counter[category]
                     result_str += f"{category} {key}: {metrics[category][key]:.4f}" + '\n'
                     if writer is not None:
-                        writer.add_scalar(f"mean/{category}/{key}", metrics[category][key], iteration)
-                        writer.add_scalar(f"std/{category}/{key}", stds[category][key], iteration)
+                        writer.add_scalar(f"{category}/mean/{key}", metrics[category][key], iteration)
+                        writer.add_scalar(f"{category}/std/{key}", stds[category][key], iteration)
                         
 
             result_str += '=' * 100 + '\n'
             self.logger.info(result_str)
-            self.logger.info(str(means.T) + '\n')
-            self.logger.info(str(stds.T) + '\n')
             
             out = {
                 f"{qtype}_{name}": metrics[qtype][name]
