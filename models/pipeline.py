@@ -68,6 +68,12 @@ class CGSTVG(nn.Module):
         # for param in self.vid.parameters():
         #    param.requires_grad = False
 
+        self.NCLIPS = 8
+        self.VIEWS_PER_CLIP = 1
+        self.FRAMES_PER_SAMPLE = 128
+        self.FRAMES_PER_CLIP = self.FRAMES_PER_SAMPLE // self.NCLIPS
+        self.B = 1
+
         self.action_embed = None
         if self.use_actioness:
             self.action_embed = MLP(hidden_dim, hidden_dim, 1, 2, dropout=0.3)
@@ -83,12 +89,19 @@ class CGSTVG(nn.Module):
             raise ValueError("bfloat16 is not supported.")
         self.vjepa_encoder = build_vjepa_encoder(self.vjepa_config)
 
+
+        if self.cfg.MODEL.FRAME_DIMENSION==True:
+            frames_number=self.NCLIPS*self.FRAMES_PER_CLIP
+        else:
+            frames_number=1
+
         self.vjepa_classifier_motion = build_vjepa_classifier(
             config=self.vjepa_config,
             encoder=self.vjepa_encoder,
             video_data=True,
             checkpoint_path="model_zoo/vjepa/probes/k400-probe.pth.tar",
             frozen=True,
+            frames_number=frames_number,
         )
 
         self.vjepa_classifier_2d = build_vjepa_classifier(
@@ -97,6 +110,7 @@ class CGSTVG(nn.Module):
             video_data=False,
             checkpoint_path="model_zoo/vjepa/probes/in1k-probe.pth.tar",
             frozen=True,
+            frames_number=frames_number,
         )
 
         if self.cfg.MODEL.TEMPORAL_BRANCH=='a':
@@ -106,25 +120,24 @@ class CGSTVG(nn.Module):
                 video_data=True,
                 checkpoint_path="model_zoo/vjepa/probes/k400-probe.pth.tar",
                 frozen=True,
+                frames_number=frames_number,
             )
 
-        self.NCLIPS = 8
-        self.VIEWS_PER_CLIP = 1
-        self.FRAMES_PER_SAMPLE = 128
-        self.FRAMES_PER_CLIP = self.FRAMES_PER_SAMPLE // self.NCLIPS
-        self.B = 1
-
-        ###embeds
-        self.motion_embed = MLP(1, (self.NCLIPS * self.FRAMES_PER_CLIP) // 2, self.NCLIPS * self.FRAMES_PER_CLIP, 2,
-                                dropout=0.3)
-        self.rgb_embed = MLP(1, (self.NCLIPS * self.FRAMES_PER_CLIP) // 2, self.NCLIPS * self.FRAMES_PER_CLIP, 2,
-                             dropout=0.3)
-
-        ##temporal embed
-        if self.cfg.MODEL.TEMPORAL_BRANCH == 'a':
-            self.temporal_embed = MLP(1, (self.NCLIPS * self.FRAMES_PER_CLIP) // 2, self.NCLIPS * self.FRAMES_PER_CLIP, 2,
+        if self.cfg.MODEL.FRAME_DIMENSION == False:
+            ###embeds
+            self.motion_embed = MLP(1, (self.NCLIPS * self.FRAMES_PER_CLIP) // 2, self.NCLIPS * self.FRAMES_PER_CLIP, 2,
                                     dropout=0.3)
-        self.mask_temporal_embed = nn.Linear(self.vjepa_config.num_classes_vid, hidden_dim, bias=True)
+            self.rgb_embed = MLP(1, (self.NCLIPS * self.FRAMES_PER_CLIP) // 2, self.NCLIPS * self.FRAMES_PER_CLIP, 2,
+                                 dropout=0.3)
+
+            ##temporal embed
+            if self.cfg.MODEL.TEMPORAL_BRANCH == 'a':
+                self.temporal_embed = MLP(1, (self.NCLIPS * self.FRAMES_PER_CLIP) // 2, self.NCLIPS * self.FRAMES_PER_CLIP, 2,
+                                        dropout=0.3)
+
+
+        if self.cfg.MODEL.TEMPORAL_BRANCH == 'a':
+            self.mask_temporal_embed = nn.Linear(self.vjepa_config.num_classes_vid, hidden_dim, bias=True)
 
 
         self.mask_motion_embed = nn.Linear(self.vjepa_config.num_classes_vid, hidden_dim, bias=True)
@@ -208,17 +221,29 @@ class CGSTVG(nn.Module):
                         outputs_temporal = [[self.vjepa_classifier_temporal(ost) for ost in os] for os in vjepa_features]
 
             ###mask decoder features
-            mask_motion = self.motion_embed(torch.permute(outputs_motion[0], (1, 0)))
-            mask_rgb = self.rgb_embed(torch.permute(outputs_2d[0], (1, 0)))
-            mask_motion = torch.unsqueeze(torch.permute(mask_motion, (1, 0)), 1)
-            mask_rgb = torch.unsqueeze(torch.permute(mask_rgb, (1, 0)), 1)
+            if self.cfg.MODEL.FRAME_DIMENSION == False:
+                mask_motion = self.motion_embed(torch.permute(outputs_motion[0], (1, 0)))
+                mask_rgb = self.rgb_embed(torch.permute(outputs_2d[0], (1, 0)))
+                mask_motion = torch.unsqueeze(torch.permute(mask_motion, (1, 0)), 1)
+                mask_rgb = torch.unsqueeze(torch.permute(mask_rgb, (1, 0)), 1)
+            else:
+                 mask_motion=torch.permute(outputs_motion[0], (1, 0, 2))
+                 mask_rgb = torch.permute(outputs_2d[0], (1, 0, 2))
+
+
+
             mask_motion = self.mask_motion_embed(mask_motion)
             mask_rgb = self.mask_rgb_embed(mask_rgb)
 
             #temporal mask decoder features
             if self.cfg.MODEL.TEMPORAL_BRANCH == 'a':
-                mask_temporal = self.temporal_embed(torch.permute(outputs_temporal[0], (1, 0)))
-                mask_temporal = torch.unsqueeze(torch.permute(mask_temporal, (1, 0)), 1)
+                if self.cfg.MODEL.FRAME_DIMENSION == False:
+                    mask_temporal = self.temporal_embed(torch.permute(outputs_temporal[0], (1, 0)))
+                    mask_temporal = torch.unsqueeze(torch.permute(mask_temporal, (1, 0)), 1)
+                else:
+                    mask_temporal=torch.permute(outputs_temporal[0], (1, 0, 2))
+
+
                 mask_temporal = self.mask_motion_embed(mask_temporal)
 
             ####positional embedding backbone
