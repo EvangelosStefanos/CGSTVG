@@ -11,6 +11,7 @@ INPUT:
 MODEL:
   WEIGHT: model_zoo/pretrained_resnet101_checkpoint.pth
   TEMPORAL_BRANCH: a
+  FRAME_DIMENSION: True
   VISION_BACKBONE:
     NAME: resnet101
     POS_ENC: sine

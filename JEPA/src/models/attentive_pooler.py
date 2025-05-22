@@ -30,10 +30,13 @@ class AttentivePooler(nn.Module):
         norm_layer=nn.LayerNorm,
         init_std=0.02,
         qkv_bias=True,
+        frames_number=128,
         complete_block=True
     ):
         super().__init__()
         self.query_tokens = nn.Parameter(torch.zeros(1, num_queries, embed_dim))
+
+        self.frames_number = frames_number
 
         self.complete_block = complete_block
         if complete_block:
@@ -94,7 +97,7 @@ class AttentivePooler(nn.Module):
                 nn.init.constant_(m.bias, 0)
 
     def forward(self, x):
-        q = self.query_tokens.repeat(len(x), 1, 1)
+        q = self.query_tokens.repeat(len(x), self.frames_number, 1)
         q = self.cross_attention_block(q, x)
         if self.blocks is not None:
             for blk in self.blocks:
@@ -114,6 +117,7 @@ class AttentiveClassifier(nn.Module):
         init_std=0.02,
         qkv_bias=True,
         num_classes=1000,
+        frames_number=128,
         complete_block=True,
     ):
         super().__init__()
@@ -126,6 +130,7 @@ class AttentiveClassifier(nn.Module):
             norm_layer=norm_layer,
             init_std=init_std,
             qkv_bias=qkv_bias,
+            frames_number=frames_number,
             complete_block=complete_block,
         )
         self.linear = nn.Linear(embed_dim, num_classes, bias=True)
