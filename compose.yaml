@@ -6,13 +6,14 @@ services:
     volumes:
       - ./data:/app/data:ro
       - ./model_zoo:/app/model_zoo:ro
-      # - ./output/baseline/vidstg/model_125000.pth:/app/output/vidstg/model_125000.pth:ro
+      - output-data:/app/output
     ipc: host
     deploy:
       resources:
         reservations:
           devices:
             - driver: nvidia
-              # count: 1
               device_ids: [ '0', '1' ]
               capabilities: [ gpu ]
+volumes:
+  output-data:
