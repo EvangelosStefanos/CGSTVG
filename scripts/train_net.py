@@ -137,7 +137,7 @@ def train(cfg, local_rank, distributed, logger):
                     ax.add_patch(patch) # predicted bbox
                     ax.text(x, y - 5, 'Pred', color='blue')
 
-                fig.savefig(f"output/vidstg/step_{iteration}.png")
+                fig.savefig(f"{cfg.OUTPUT_DIR}step_{iteration}.png")
                 plt.close(fig)
 
         # compute loss

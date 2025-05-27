@@ -41,7 +41,7 @@ def modality_concatenation(self, feat_2d, feat_motion, feat_text, feat_temporal)
                 Y = tsne.fit_transform(X)
                 ax.set_title("Perplexity=%d" % perplexities[i])
                 ax.scatter(Y[:, 0], Y[:, 1], Y[:, 2])
-            fig.savefig(f"output/vidstg/tsne_{self.steps}.png")
+            fig.savefig(f"{self.cfg.OUTPUT_DIR}tsne_{self.steps}.png")
             plt.close(fig)
     self.steps += 1
     # TSNE STOP #
