@@ -203,7 +203,21 @@ def make_vidstg_input_clip(cfg, split, video_data):
         sample_slice = list(range(start_idx, end_idx + 1))  
     
     else:
-        sample_slice = list(range(0, len(video_frames))) 
+        sample_slice = list(range(0, len(video_frames)))
+    
+    MAX_FRAMES_PER_SAMPLE = 300
+    d = list(range(len(sample_slice) - MAX_FRAMES_PER_SAMPLE))
+    if len(d) > 0:
+        MAX_ITERS = 1000000
+        for i in range(MAX_ITERS + 1):
+            s = random.choice(d)
+            sample_slice_new = sample_slice[s:s+MAX_FRAMES_PER_SAMPLE]
+            if len(np.where(gt_mask[sample_slice_new])[0]) > 0:
+                break
+            assert i < MAX_ITERS, f"ERROR: No tube found in video sample after {MAX_ITERS} tries."
+        # print(f"{len(sample_slice)} [{min(sample_slice)}, {max(sample_slice)}] >> {len(sample_slice_new)} [{min(sample_slice_new)}, {max(sample_slice_new)}]")
+        sample_slice = sample_slice_new
+            
 
     # Need to Sample the input frames to satisfy
     if len(sample_slice) > input_frame_num:
