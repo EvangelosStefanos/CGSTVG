@@ -210,6 +210,9 @@ class CGSTVG(nn.Module):
         else:
             self.tgt_embed = SeqEmbeddingSine(self.NCLIPS * self.FRAMES_PER_CLIP + 1, self.d_model)
 
+        ####positional embedding backbone
+        self.position_embedding = build_position_encoding(self.cfg)
+
         return
 
     def forward(self, videos, texts, targets, iteration_rate=-1):
@@ -283,24 +286,21 @@ class CGSTVG(nn.Module):
 
                 mask_temporal = self.mask_motion_embed(mask_temporal)
 
-            ####positional embedding backbone
-            position_embedding = build_position_encoding(self.cfg)
-
 
             ###mask position embeddings
             motion_pos = torch.unsqueeze(torch.permute(mask_motion, (0, 2, 1)), -1)
             rgb_pos = torch.unsqueeze(torch.permute(mask_rgb, (0, 2, 1)), -1)
             mask_pos = torch.unsqueeze(torch.zeros(motion_pos.size()[0], motion_pos.size()[2], dtype=torch.bool),
                                        -1).to(self.device)
-            encoder_pos_motion = position_embedding(motion_pos, mask_pos)
-            encoder_pos_rgb = position_embedding(rgb_pos, mask_pos)
+            encoder_pos_motion = self.position_embedding(motion_pos, mask_pos)
+            encoder_pos_rgb = self.position_embedding(rgb_pos, mask_pos)
             encoder_pos_motion = torch.squeeze(torch.permute(encoder_pos_motion, (0, 2, 1, 3)), 3)
             encoder_pos_rgb = torch.squeeze(torch.permute(encoder_pos_rgb, (0, 2, 1, 3)), 3)
 
             ###temporal mask position embeddings
             if self.cfg.MODEL.TEMPORAL_BRANCH == 'a':
                 temporal_pos = torch.unsqueeze(torch.permute(mask_temporal, (0, 2, 1)), -1)
-                encoder_pos_temporal = position_embedding(temporal_pos, mask_pos)
+                encoder_pos_temporal = self.position_embedding(temporal_pos, mask_pos)
                 encoder_pos_temporal = torch.squeeze(torch.permute(encoder_pos_temporal, (0, 2, 1, 3)), 3)
 
 
@@ -353,7 +353,7 @@ class CGSTVG(nn.Module):
             text_pos = torch.unsqueeze(torch.permute(text_outputs[1], (2, 1, 0)), 0)
             mask_pos_t = torch.unsqueeze(torch.zeros(text_pos.size()[0], text_pos.size()[3], dtype=torch.bool), 1).to(
                 self.device)
-            encoder_pos_text = position_embedding(text_pos, mask_pos_t)
+            encoder_pos_text = self.position_embedding(text_pos, mask_pos_t)
             encoder_pos_text = torch.squeeze(torch.permute(encoder_pos_text, (3, 0, 1, 2)), -1)
 
             ####tgt input and positional encoding
