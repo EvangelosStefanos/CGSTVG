@@ -24,7 +24,8 @@ def modality_concatenation(self, feat_2d, feat_motion, feat_text, feat_temporal)
     concat_features = torch.cat([feat_2d.permute(1,0,2), feat_text, feat_motion.permute(1,0,2)], dim=0)
 
     # TSNE START #
-    if self.steps % 40338 < 10:
+    STEPS_PER_EPOCH = 40338 # 2 gpus
+    if self.steps % STEPS_PER_EPOCH < 10:
         with torch.no_grad():
             W, T, E = feat_text.shape
             X = concat_features.reshape(shape=((W+2)*T, E)).detach().cpu()
@@ -40,7 +41,17 @@ def modality_concatenation(self, feat_2d, feat_motion, feat_text, feat_temporal)
                 )
                 Y = tsne.fit_transform(X)
                 ax.set_title("Perplexity=%d" % perplexities[i])
-                ax.scatter(Y[:, 0], Y[:, 1], Y[:, 2])
+
+                p = Y[0*T:1*T]
+                ax.scatter(p[:, 0], p[:, 1], p[:, 2], c="r", label="image")
+                
+                p = Y[1*T:13*T]
+                ax.scatter(p[:, 0], p[:, 1], p[:, 2], c="g", label="text")
+                
+                p = Y[13*T:14*T]
+                ax.scatter(p[:, 0], p[:, 1], p[:, 2], c="b", label="motion")
+
+                ax.legend()
             fig.savefig(f"{self.cfg.OUTPUT_DIR}tsne_{self.steps}.png")
             plt.close(fig)
     self.steps += 1
