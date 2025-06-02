@@ -126,11 +126,9 @@ class CGSTVG(nn.Module):
         self.vjepa_encoder = build_vjepa_encoder(self.vjepa_config)
         self.FROZEN = True
 
-
-        if self.cfg.MODEL.FRAME_DIMENSION==True:
-            frames_number=self.NCLIPS*self.FRAMES_PER_CLIP
-        else:
-            frames_number=1
+        frames_number = 1
+        if self.cfg.MODEL.FRAME_DIMENSION == True:
+            frames_number = self.NCLIPS * self.FRAMES_PER_CLIP
 
         self.vjepa_classifier_motion = build_vjepa_classifier(
             config=self.vjepa_config,
@@ -167,15 +165,6 @@ class CGSTVG(nn.Module):
             self.rgb_embed = MLP(1, (self.NCLIPS * self.FRAMES_PER_CLIP) // 2, self.NCLIPS * self.FRAMES_PER_CLIP, 2,
                                  dropout=0.3)
 
-            ##temporal embed
-            if self.cfg.MODEL.TEMPORAL_BRANCH == 'a':
-                self.temporal_embed = MLP(1, (self.NCLIPS * self.FRAMES_PER_CLIP) // 2, self.NCLIPS * self.FRAMES_PER_CLIP, 2,
-                                        dropout=0.3)
-
-
-        if self.cfg.MODEL.TEMPORAL_BRANCH == 'a':
-            self.mask_temporal_embed = nn.Linear(self.vjepa_config.num_classes_vid, hidden_dim, bias=True)
-
 
         self.mask_motion_embed = nn.Linear(self.vjepa_config.num_classes_vid, hidden_dim, bias=True)
         self.mask_rgb_embed = nn.Linear(self.vjepa_config.num_classes_img, hidden_dim, bias=True)
@@ -193,6 +182,12 @@ class CGSTVG(nn.Module):
 
         ##temporal decoder
         if self.cfg.MODEL.TEMPORAL_BRANCH == 'a':
+            ##temporal embed
+            if self.cfg.MODEL.FRAME_DIMENSION == False:
+                self.temporal_embed = MLP(1, (self.NCLIPS * self.FRAMES_PER_CLIP) // 2, self.NCLIPS * self.FRAMES_PER_CLIP, 2, dropout=0.3)
+            # temporal mask #
+            self.mask_temporal_embed = nn.Linear(self.vjepa_config.num_classes_vid, hidden_dim, bias=True)
+            # temporal decoder #
             decoder_layer_temporal = nn.TransformerDecoderLayer(d_model=hidden_dim, nhead=cfg.MODEL.CG.HEADS)
             self.decoder_temporal = nn.TransformerDecoder(decoder_layer_temporal, num_layers=cfg.MODEL.CG.DEC_LAYERS // 3)
 
@@ -278,47 +273,20 @@ class CGSTVG(nn.Module):
                 mask_motion = torch.unsqueeze(torch.permute(mask_motion, (1, 0)), 1)
                 mask_rgb = torch.unsqueeze(torch.permute(mask_rgb, (1, 0)), 1)
             else:
-                 mask_motion=torch.permute(outputs_motion[0], (1, 0, 2))
-                 mask_rgb = torch.permute(outputs_2d[0], (1, 0, 2))
-
-
+                mask_motion = torch.permute(outputs_motion[0], (1, 0, 2))
+                mask_rgb = torch.permute(outputs_2d[0], (1, 0, 2))
 
             mask_motion = self.mask_motion_embed(mask_motion)
             mask_rgb = self.mask_rgb_embed(mask_rgb)
 
-            #temporal mask decoder features
-            if self.cfg.MODEL.TEMPORAL_BRANCH == 'a':
-                if self.cfg.MODEL.FRAME_DIMENSION == False:
-                    mask_temporal = self.temporal_embed(torch.permute(outputs_temporal[0], (1, 0)))
-                    mask_temporal = torch.unsqueeze(torch.permute(mask_temporal, (1, 0)), 1)
-                else:
-                    mask_temporal=torch.permute(outputs_temporal[0], (1, 0, 2))
-
-
-                mask_temporal = self.mask_motion_embed(mask_temporal)
-
-
             ###mask position embeddings
             motion_pos = torch.unsqueeze(torch.permute(mask_motion, (0, 2, 1)), -1)
             rgb_pos = torch.unsqueeze(torch.permute(mask_rgb, (0, 2, 1)), -1)
-            mask_pos = torch.unsqueeze(torch.zeros(motion_pos.size()[0], motion_pos.size()[2], dtype=torch.bool),
-                                       -1).to(self.device)
+            mask_pos = torch.unsqueeze(torch.zeros(motion_pos.size()[0], motion_pos.size()[2], dtype=torch.bool), -1).to(self.device)
             encoder_pos_motion = self.position_embedding(motion_pos, mask_pos)
             encoder_pos_rgb = self.position_embedding(rgb_pos, mask_pos)
             encoder_pos_motion = torch.squeeze(torch.permute(encoder_pos_motion, (0, 2, 1, 3)), 3)
             encoder_pos_rgb = torch.squeeze(torch.permute(encoder_pos_rgb, (0, 2, 1, 3)), 3)
-
-            ###temporal mask position embeddings
-            if self.cfg.MODEL.TEMPORAL_BRANCH == 'a':
-                temporal_pos = torch.unsqueeze(torch.permute(mask_temporal, (0, 2, 1)), -1)
-                encoder_pos_temporal = self.position_embedding(temporal_pos, mask_pos)
-                encoder_pos_temporal = torch.squeeze(torch.permute(encoder_pos_temporal, (0, 2, 1, 3)), 3)
-
-
-
-
-
-
 
             ####tgt input and positional encoding
             tgt = torch.zeros(self.FRAMES_PER_SAMPLE, self.B, self.d_model).to(self.device)
@@ -336,17 +304,9 @@ class CGSTVG(nn.Module):
             output_motion_padded = self.decoder_motion(tgt + tgt_pos, mask_motion + encoder_pos_motion,
                                                        tgt_mask=tgt_mask_visual,
                                                        memory_key_padding_mask=memory_key_padding_mask.bool())
-            output_2d_padded = self.decoder_2d(tgt + tgt_pos, mask_rgb + encoder_pos_rgb, tgt_mask=tgt_mask_visual,
+            output_2d_padded = self.decoder_2d(tgt + tgt_pos, mask_rgb + encoder_pos_rgb,
+                                               tgt_mask=tgt_mask_visual,
                                                memory_key_padding_mask=memory_key_padding_mask.bool())
-
-            ##temporal decoding
-            if self.cfg.MODEL.TEMPORAL_BRANCH == 'a':
-                output_temporal_padded = self.decoder_motion(tgt + tgt_pos, mask_temporal + encoder_pos_temporal,
-                                                       tgt_mask=tgt_mask_visual,
-                                                       memory_key_padding_mask=memory_key_padding_mask.bool())
-
-                output_temporal = output_temporal_padded[:tgt.size(0) - nframes_required, :, :]
-
 
             ###keep unpadded tensors
             output_motion = output_motion_padded[:tgt.size(0) - nframes_required, :, :]
@@ -362,8 +322,7 @@ class CGSTVG(nn.Module):
 
             # text position embeddings
             text_pos = torch.unsqueeze(torch.permute(text_outputs[1], (2, 1, 0)), 0)
-            mask_pos_t = torch.unsqueeze(torch.zeros(text_pos.size()[0], text_pos.size()[3], dtype=torch.bool), 1).to(
-                self.device)
+            mask_pos_t = torch.unsqueeze(torch.zeros(text_pos.size()[0], text_pos.size()[3], dtype=torch.bool), 1).to(self.device)
             encoder_pos_text = self.position_embedding(text_pos, mask_pos_t)
             encoder_pos_text = torch.squeeze(torch.permute(encoder_pos_text, (3, 0, 1, 2)), -1)
 
@@ -375,21 +334,34 @@ class CGSTVG(nn.Module):
             tgt_mask_textual = nn.Transformer.generate_square_subsequent_mask(tgt_text.size(0)).to(self.device)
 
             ##textual decoder
-            output_text = self.decoder_text(tgt_text + tgt_pos_text, mask_text + encoder_pos_text,
-                                            tgt_mask=tgt_mask_textual)
+            output_text = self.decoder_text(tgt_text + tgt_pos_text, mask_text + encoder_pos_text, tgt_mask=tgt_mask_textual)
 
+            ##temporal decoding
+            output_temporal = 0
             if self.cfg.MODEL.TEMPORAL_BRANCH == 'a':
-                pos_query, time_query, conf_query = modality_concatenation(self, output_2d, output_motion, output_text, output_temporal)
-            else:
-                output_temporal=0
-                pos_query, time_query, conf_query = modality_concatenation(self, output_2d, output_motion, output_text,output_temporal)
+                if self.cfg.MODEL.FRAME_DIMENSION == False:
+                    mask_temporal = self.temporal_embed(torch.permute(outputs_temporal[0], (1, 0)))
+                    mask_temporal = torch.unsqueeze(torch.permute(mask_temporal, (1, 0)), 1)
+                else:
+                    mask_temporal = torch.permute(outputs_temporal[0], (1, 0, 2))
+
+                mask_temporal = self.mask_motion_embed(mask_temporal)
+                temporal_pos = torch.unsqueeze(torch.permute(mask_temporal, (0, 2, 1)), -1)
+                encoder_pos_temporal = self.position_embedding(temporal_pos, mask_pos)
+                
+                encoder_pos_temporal = torch.squeeze(torch.permute(encoder_pos_temporal, (0, 2, 1, 3)), 3)
+                output_temporal_padded = self.decoder_motion(tgt + tgt_pos, mask_temporal + encoder_pos_temporal,
+                                                       tgt_mask=tgt_mask_visual,
+                                                       memory_key_padding_mask=memory_key_padding_mask.bool())
+
+                output_temporal = output_temporal_padded[:tgt.size(0) - nframes_required, :, :]
+
+            pos_query, time_query, conf_query = modality_concatenation(self, output_2d, output_motion, output_text, output_temporal)
 
 
             NUM_LAYERS = 1
-            pos_query = pos_query.reshape(shape=(
-            NUM_LAYERS, pos_query.size(0), 4))  # [FRAMES_PER_SAMPLE, 4] -> [NUM_LAYERS, FRAMES_PER_SAMPLE, 4]
-            conf_query = conf_query.reshape(
-                shape=(NUM_LAYERS, conf_query.size(0)))  # [FRAMES_PER_SAMPLE] -> [NUM_LAYERS, FRAMES_PER_SAMPLE]
+            pos_query = pos_query.reshape(shape=(NUM_LAYERS, pos_query.size(0), 4))  # [FRAMES_PER_SAMPLE, 4] -> [NUM_LAYERS, FRAMES_PER_SAMPLE, 4]
+            conf_query = conf_query.reshape(shape=(NUM_LAYERS, conf_query.size(0)))  # [FRAMES_PER_SAMPLE] -> [NUM_LAYERS, FRAMES_PER_SAMPLE]
 
             out = {}
 
@@ -405,8 +377,7 @@ class CGSTVG(nn.Module):
             time_hiden_state = time_query
             outputs_time = self.temp_embed(time_hiden_state)  # [num_layers, b, T, 2]
             outputs_time = outputs_time.permute(dims=(1, 0, 2))
-            outputs_time = outputs_time.reshape(shape=(NUM_LAYERS, self.B, time_query.size(0),
-                                                       2))  # [B, FRAMES_PER_SAMPLE, 2] -> [NUM_LAYERS, B, FRAMES_PER_SAMPLE, 2]
+            outputs_time = outputs_time.reshape(shape=(NUM_LAYERS, self.B, time_query.size(0), 2))  # [B, FRAMES_PER_SAMPLE, 2] -> [NUM_LAYERS, B, FRAMES_PER_SAMPLE, 2]
             out.update({"pred_sted": outputs_time[-1]})
             #######################################################
 
