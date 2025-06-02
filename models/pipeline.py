@@ -350,7 +350,7 @@ class CGSTVG(nn.Module):
                 encoder_pos_temporal = self.position_embedding(temporal_pos, mask_pos)
                 
                 encoder_pos_temporal = torch.squeeze(torch.permute(encoder_pos_temporal, (0, 2, 1, 3)), 3)
-                output_temporal_padded = self.decoder_motion(tgt + tgt_pos, mask_temporal + encoder_pos_temporal,
+                output_temporal_padded = self.decoder_temporal(tgt + tgt_pos, mask_temporal + encoder_pos_temporal,
                                                        tgt_mask=tgt_mask_visual,
                                                        memory_key_padding_mask=memory_key_padding_mask.bool())
 
