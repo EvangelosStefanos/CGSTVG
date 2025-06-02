@@ -171,13 +171,13 @@ class CGSTVG(nn.Module):
 
         ###Decoders####
         decoder_layer_2d = nn.TransformerDecoderLayer(d_model=hidden_dim, nhead=cfg.MODEL.CG.HEADS)
-        self.decoder_2d = nn.TransformerDecoder(decoder_layer_2d, num_layers=cfg.MODEL.CG.DEC_LAYERS // 3)
+        self.decoder_2d = nn.TransformerDecoder(decoder_layer_2d, num_layers=cfg.MODEL.CG.DEC_LAYERS)
 
         decoder_layer_motion = nn.TransformerDecoderLayer(d_model=hidden_dim, nhead=cfg.MODEL.CG.HEADS)
-        self.decoder_motion = nn.TransformerDecoder(decoder_layer_motion, num_layers=cfg.MODEL.CG.DEC_LAYERS // 3)
+        self.decoder_motion = nn.TransformerDecoder(decoder_layer_motion, num_layers=cfg.MODEL.CG.DEC_LAYERS)
 
         decoder_layer_text = nn.TransformerDecoderLayer(d_model=hidden_dim, nhead=cfg.MODEL.CG.HEADS)
-        self.decoder_text = nn.TransformerDecoder(decoder_layer_text, num_layers=cfg.MODEL.CG.DEC_LAYERS // 3)
+        self.decoder_text = nn.TransformerDecoder(decoder_layer_text, num_layers=cfg.MODEL.CG.DEC_LAYERS)
 
 
         ##temporal decoder
@@ -189,7 +189,7 @@ class CGSTVG(nn.Module):
             self.mask_temporal_embed = nn.Linear(self.vjepa_config.num_classes_vid, hidden_dim, bias=True)
             # temporal decoder #
             decoder_layer_temporal = nn.TransformerDecoderLayer(d_model=hidden_dim, nhead=cfg.MODEL.CG.HEADS)
-            self.decoder_temporal = nn.TransformerDecoder(decoder_layer_temporal, num_layers=cfg.MODEL.CG.DEC_LAYERS // 3)
+            self.decoder_temporal = nn.TransformerDecoder(decoder_layer_temporal, num_layers=cfg.MODEL.CG.DEC_LAYERS)
 
 
         self.pos_fc = nn.Sequential(
