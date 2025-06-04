@@ -84,6 +84,7 @@ class CGSTVG(nn.Module):
         self.use_aux_loss = cfg.SOLVER.USE_AUX_LOSS  # use the output of each transformer layer
         self.use_actioness = cfg.MODEL.CG.USE_ACTION
         self.query_dim = cfg.MODEL.CG.QUERY_DIM
+        DROPOUT = self.cfg.MODEL.CG.DROPOUT
 
         # self.vis_encoder = build_vis_encoder(cfg)
         # vis_fea_dim = self.vis_encoder.num_channels
@@ -95,7 +96,7 @@ class CGSTVG(nn.Module):
 
         hidden_dim = cfg.MODEL.CG.HIDDEN
         # self.input_proj = nn.Conv2d(vis_fea_dim, hidden_dim, kernel_size=1)
-        self.temp_embed = MLP(hidden_dim, hidden_dim, 2, 2, dropout=0.3)
+        self.temp_embed = MLP(hidden_dim, hidden_dim, 2, 3, dropout=DROPOUT)
         self.bbox_embed = MLP(hidden_dim, hidden_dim, 4, 3)
 
         # self.vid = vidswin_model("video_swin_t_p4w7", "video_swin_t_p4w7_k400_1k")
@@ -112,7 +113,7 @@ class CGSTVG(nn.Module):
 
         self.action_embed = None
         if self.use_actioness:
-            self.action_embed = MLP(hidden_dim, hidden_dim, 1, 2, dropout=0.3)
+            self.action_embed = MLP(hidden_dim, hidden_dim, 1, 3, dropout=DROPOUT)
 
         # self.ground_decoder.time_embed2 = self.action_embed
 
@@ -128,7 +129,7 @@ class CGSTVG(nn.Module):
 
         frames_number = 1
         if self.cfg.MODEL.FRAME_DIMENSION == True:
-            frames_number = self.NCLIPS * self.FRAMES_PER_CLIP
+            frames_number = self.FRAMES_PER_SAMPLE
 
         self.vjepa_classifier_motion = build_vjepa_classifier(
             config=self.vjepa_config,
@@ -160,11 +161,8 @@ class CGSTVG(nn.Module):
 
         if self.cfg.MODEL.FRAME_DIMENSION == False:
             ###embeds
-            self.motion_embed = MLP(1, (self.NCLIPS * self.FRAMES_PER_CLIP) // 2, self.NCLIPS * self.FRAMES_PER_CLIP, 2,
-                                    dropout=0.3)
-            self.rgb_embed = MLP(1, (self.NCLIPS * self.FRAMES_PER_CLIP) // 2, self.NCLIPS * self.FRAMES_PER_CLIP, 2,
-                                 dropout=0.3)
-
+            self.motion_embed = MLP(1, (self.FRAMES_PER_SAMPLE) // 2, self.FRAMES_PER_SAMPLE, 3, dropout=DROPOUT)
+            self.rgb_embed = MLP(1, (self.FRAMES_PER_SAMPLE) // 2, self.FRAMES_PER_SAMPLE, 3, dropout=DROPOUT)
 
         self.mask_motion_embed = nn.Linear(self.vjepa_config.num_classes_vid, hidden_dim, bias=True)
         self.mask_rgb_embed = nn.Linear(self.vjepa_config.num_classes_img, hidden_dim, bias=True)
@@ -184,7 +182,7 @@ class CGSTVG(nn.Module):
         if self.cfg.MODEL.TEMPORAL_BRANCH == 'a':
             ##temporal embed
             if self.cfg.MODEL.FRAME_DIMENSION == False:
-                self.temporal_embed = MLP(1, (self.NCLIPS * self.FRAMES_PER_CLIP) // 2, self.NCLIPS * self.FRAMES_PER_CLIP, 2, dropout=0.3)
+                self.temporal_embed = MLP(1, (self.FRAMES_PER_SAMPLE) // 2, self.FRAMES_PER_SAMPLE, 3, dropout=DROPOUT)
             # temporal mask #
             self.mask_temporal_embed = nn.Linear(self.vjepa_config.num_classes_vid, hidden_dim, bias=True)
             # temporal decoder #
@@ -192,29 +190,30 @@ class CGSTVG(nn.Module):
             self.decoder_temporal = nn.TransformerDecoder(decoder_layer_temporal, num_layers=cfg.MODEL.CG.DEC_LAYERS)
 
 
+        self.d_model = self.cfg.MODEL.CG.HIDDEN
         self.pos_fc = nn.Sequential(
-            BertLayerNorm(256, eps=1e-12),
-            nn.Dropout(0.1),
-            nn.Linear(256, 4),
+            BertLayerNorm(self.d_model, eps=1e-12),
+            nn.Dropout(DROPOUT),
+            nn.Linear(self.d_model, 4),
             nn.ReLU(True),
             BertLayerNorm(4, eps=1e-12),
         )
 
         self.time_fc = nn.Sequential(
-            BertLayerNorm(256, eps=1e-12),
-            nn.Dropout(0.1),
-            nn.Linear(256, 256),
+            BertLayerNorm(self.d_model, eps=1e-12),
+            nn.Dropout(DROPOUT),
+            nn.Linear(self.d_model, self.d_model),
             nn.ReLU(True),
-            BertLayerNorm(256, eps=1e-12),
+            BertLayerNorm(self.d_model, eps=1e-12),
         )
 
-        self.conf = MLP(4, self.NCLIPS * self.FRAMES_PER_CLIP, 1, 3, dropout=0.3)
+        self.conf = MLP(4, self.FRAMES_PER_SAMPLE, 1, 3, dropout=DROPOUT)
 
-        self.d_model = self.cfg.MODEL.CG.HIDDEN
+        # self.d_model = self.cfg.MODEL.CG.HIDDEN
         if cfg.MODEL.CG.USE_LEARN_TIME_EMBED:
-            self.tgt_embed = SeqEmbeddingLearned(self.NCLIPS * self.FRAMES_PER_CLIP + 1, self.d_model)
+            self.tgt_embed = SeqEmbeddingLearned(self.FRAMES_PER_SAMPLE + 1, self.d_model)
         else:
-            self.tgt_embed = SeqEmbeddingSine(self.NCLIPS * self.FRAMES_PER_CLIP + 1, self.d_model)
+            self.tgt_embed = SeqEmbeddingSine(self.FRAMES_PER_SAMPLE + 1, self.d_model)
 
         ####positional embedding backbone
         self.position_embedding = build_position_encoding(self.cfg)
@@ -300,13 +299,20 @@ class CGSTVG(nn.Module):
             else:
                 memory_key_padding_mask = torch.zeros(self.B, tgt.size(0)).byte().to(self.device)
 
-            ###visual decoding
-            output_motion_padded = self.decoder_motion(tgt + tgt_pos, mask_motion + encoder_pos_motion,
-                                                       tgt_mask=tgt_mask_visual,
-                                                       memory_key_padding_mask=memory_key_padding_mask.bool())
-            output_2d_padded = self.decoder_2d(tgt + tgt_pos, mask_rgb + encoder_pos_rgb,
-                                               tgt_mask=tgt_mask_visual,
-                                               memory_key_padding_mask=memory_key_padding_mask.bool())
+            ##visual decoding
+            output_motion_padded = self.decoder_motion(
+                tgt + tgt_pos,
+                mask_motion + encoder_pos_motion,
+                tgt_mask=tgt_mask_visual,
+                memory_key_padding_mask=memory_key_padding_mask.bool()
+            )
+            
+            output_2d_padded = self.decoder_2d(
+                tgt + tgt_pos,
+                mask_rgb + encoder_pos_rgb,
+                tgt_mask=tgt_mask_visual,
+                memory_key_padding_mask=memory_key_padding_mask.bool()
+            )
 
             ###keep unpadded tensors
             output_motion = output_motion_padded[:tgt.size(0) - nframes_required, :, :]
@@ -350,9 +356,12 @@ class CGSTVG(nn.Module):
                 encoder_pos_temporal = self.position_embedding(temporal_pos, mask_pos)
                 
                 encoder_pos_temporal = torch.squeeze(torch.permute(encoder_pos_temporal, (0, 2, 1, 3)), 3)
-                output_temporal_padded = self.decoder_temporal(tgt + tgt_pos, mask_temporal + encoder_pos_temporal,
-                                                       tgt_mask=tgt_mask_visual,
-                                                       memory_key_padding_mask=memory_key_padding_mask.bool())
+                output_temporal_padded = self.decoder_temporal(
+                    tgt + tgt_pos,
+                    mask_temporal + encoder_pos_temporal,
+                    tgt_mask=tgt_mask_visual,
+                    memory_key_padding_mask=memory_key_padding_mask.bool()
+                )
 
                 output_temporal = output_temporal_padded[:tgt.size(0) - nframes_required, :, :]
 
