@@ -18,8 +18,44 @@ import matplotlib.pyplot as plt
 
 
 def modality_concatenation(self, feat_2d, feat_motion, feat_text, feat_temporal):
+    # plot means-stds #
+    STEPS_PER_EPOCH = 40338 # 2 gpus
+    if self.steps % STEPS_PER_EPOCH < 10:
+        with torch.no_grad():
+            (fig, subplots) = plt.subplots(1, 2, figsize=(19.2, 10.8), layout="constrained", squeeze=False)
+            feats = [feat_2d, feat_motion, feat_text]
+            colors = ["r", "g", "b"]
+            labels = ["image", "text", "motion"]
+            for i, ax in enumerate(subplots.flat):
+                if i==0:
+                    ax.set_title("Mean-Stds")
+                    for j in range(len(feats)):
+                        feats[j] = feats[j].detach().cpu()
+                        (std, mean) = torch.std_mean(feats[j], dim=0)
+                        mean = mean.flatten()
+                        std = std.flatten()
+                        x = list(range(len(mean)))
+                        # ax.scatter(x, mean, s=100*std, alpha=0.5, c=colors[j], label=labels[j])
+                        ax.errorbar(x=x, y=mean, yerr=std, alpha=0.5, linestyle="None", c=colors[j], label=labels[j], fmt="-o")
+                    ax.legend()
+                elif i==1:
+                    ax.set_title("Mean-Stds-Total")
+                    for j in range(len(feats)):
+                        feats[j] = feats[j].detach().cpu()
+                        (std, mean) = torch.std_mean(feats[j])
+                        mean = mean.flatten()
+                        std = std.flatten()
+                        # ax.scatter(x, mean, s=100*std, alpha=0.5, c=colors[j], label=labels[j])
+                        ax.errorbar(x=j, y=mean, yerr=std, alpha=0.5, linestyle="None", c=colors[j], label=labels[j], fmt="-o")
+                    ax.legend()                    
+            fig.savefig(f"{self.cfg.OUTPUT_DIR}mean-std_{self.steps}.png")
+            plt.close(fig)
+    
     frame_length = feat_2d.size(0)
     feat_text = feat_text.expand(feat_text.size(0), frame_length, feat_text.size(-1))
+    
+    # clamp here if needed
+    
     # concat visual and text features and Pad the vis_pos with 0 for the text tokens
     concat_features = torch.cat([feat_2d.permute(1,0,2), feat_text, feat_motion.permute(1,0,2)], dim=0)
 
