@@ -20,6 +20,14 @@ import matplotlib.pyplot as plt
 def modality_concatenation(self, feat_2d, feat_motion, feat_text, feat_temporal):
     frame_length = feat_2d.size(0)
     feat_text = feat_text.expand(feat_text.size(0), frame_length, feat_text.size(-1))
+
+    a=feat_2d.permute(1,0,2)
+    b=feat_motion.permute(1,0,2)
+
+    resa=torch.std_mean(a)
+    resb = torch.std_mean(b)
+    rest=torch.std_mean(feat_text)
+
     # concat visual and text features and Pad the vis_pos with 0 for the text tokens
     concat_features = torch.cat([feat_2d.permute(1,0,2), feat_text, feat_motion.permute(1,0,2)], dim=0)
 
@@ -37,7 +45,7 @@ def modality_concatenation(self, feat_2d, feat_motion, feat_text, feat_temporal)
                     init="random",
                     random_state=0,
                     perplexity=perplexities[i],
-                    max_iter=300,
+                    n_iter=300,
                 )
                 Y = tsne.fit_transform(X)
                 ax.set_title("Perplexity=%d" % perplexities[i])
