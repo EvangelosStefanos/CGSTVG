@@ -55,6 +55,10 @@ def modality_concatenation(self, feat_2d, feat_motion, feat_text, feat_temporal)
     feat_text = feat_text.expand(feat_text.size(0), frame_length, feat_text.size(-1))
     
     # clamp here if needed
+    feat_2d = feat_2d.clamp(min=-1,max=1)
+    feat_motion = feat_motion.clamp(min=-1,max=1)
+    feat_text = feat_text.clamp(min=-1,max=1)
+    feat_temporal = feat_temporal.clamp(min=-1,max=1)
     
     # concat visual and text features and Pad the vis_pos with 0 for the text tokens
     concat_features = torch.cat([feat_2d.permute(1,0,2), feat_text, feat_motion.permute(1,0,2)], dim=0)
