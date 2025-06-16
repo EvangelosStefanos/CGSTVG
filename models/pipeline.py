@@ -15,12 +15,13 @@ from models.grounding_model.position_encoding import SeqEmbeddingLearned, SeqEmb
 from models.bert_model.bert_module import BertLayerNorm
 from sklearn.manifold import TSNE
 import matplotlib.pyplot as plt
+from utils.comm import is_main_process
 
 
 def modality_concatenation(self, feat_2d, feat_motion, feat_text, feat_temporal):
     # plot means-stds #
     STEPS_PER_EPOCH = 40338 # 2 gpus
-    if self.steps % STEPS_PER_EPOCH < 10:
+    if is_main_process() and self.steps % STEPS_PER_EPOCH < 10:
         with torch.no_grad():
             (fig, subplots) = plt.subplots(1, 2, figsize=(19.2, 10.8), layout="constrained", squeeze=False)
             feats = [feat_2d, feat_motion, feat_text]
@@ -65,7 +66,7 @@ def modality_concatenation(self, feat_2d, feat_motion, feat_text, feat_temporal)
 
     # TSNE START #
     STEPS_PER_EPOCH = 40338 # 2 gpus
-    if self.steps % STEPS_PER_EPOCH < 10:
+    if is_main_process() and self.steps % STEPS_PER_EPOCH < 10:
         with torch.no_grad():
             W, T, E = feat_text.shape
             X = concat_features.reshape(shape=((W+2)*T, E)).detach().cpu()
