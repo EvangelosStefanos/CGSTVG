@@ -29,14 +29,14 @@ def train(cfg, local_rank, distributed, logger):
     optimizer = make_optimizer(cfg, model, logger)
     model_ema = deepcopy(model) if cfg.MODEL.EMA else None
     model_without_ddp = model
-    
+
     if distributed:
         model = torch.nn.parallel.DistributedDataParallel(
             model, device_ids=[local_rank], output_device=local_rank,
             find_unused_parameters=True
         )
         model_without_ddp = model.module
-    
+
     arguments = {}
     arguments["iteration"] = 0
 
@@ -47,15 +47,15 @@ def train(cfg, local_rank, distributed, logger):
     )
     extra_checkpoint_data = checkpointer.load(cfg.MODEL.WEIGHT)
     arguments.update(extra_checkpoint_data)
-    
+
     verbose_loss = set(["loss_bbox", "loss_giou", "loss_sted", "loss_conf"])
-    
+
     if cfg.SOLVER.USE_ATTN:
         verbose_loss.add("loss_guided_attn")
-    
+
     if cfg.MODEL.CG.USE_ACTION:
         verbose_loss.add("loss_actioness")
-    
+
     # Prepare the dataset cache
     if local_rank == 0:
         split = ['train', 'test']
@@ -63,7 +63,7 @@ def train(cfg, local_rank, distributed, logger):
             split += ['val']
         for mode in split:
             _ = build_dataset(cfg, split=mode, transforms=None)
-       
+
     synchronize()
 
     train_data_loader = make_data_loader(
@@ -82,14 +82,14 @@ def train(cfg, local_rank, distributed, logger):
         writer = SummaryWriter(cfg.TENSORBOARD_DIR)
     else:
         writer = None
-    
+
     checkpoint_period = cfg.SOLVER.CHECKPOINT_PERIOD
     logger.info("Start training")
 
     if cfg.SOLVER.PRE_VAL:
         logger.info("Validating before training")
         run_eval(cfg, model, model_ema, logger, val_data_loader, device)
-    
+
     metric_logger = MetricLogger(delimiter="  ")
     max_iter = len(train_data_loader)
     start_iter = arguments["iteration"]
@@ -107,35 +107,53 @@ def train(cfg, local_rank, distributed, logger):
         videos = batch_dict['videos'].to(device)
         texts = batch_dict['texts']
         durations = batch_dict['durations']
-        targets = to_device(batch_dict["targets"], device) 
+        targets = to_device(batch_dict["targets"], device)
         targets[0]["durations"] = durations
-        outputs = model(videos, texts, targets, iteration/max_iter)
-        
-        if iteration % 40338 < 10:
+        outputs = model(videos, texts, targets, iteration / max_iter)
+
+        if is_main_process() and iteration % 40338 < 10:
             with torch.no_grad():
                 action_idx = torch.where(targets[0]["actioness"])[0][:8].detach().cpu()
-                v = videos.tensors.permute((0, 2, 3, 1))[action_idx].detach().cpu() # T C H W >> T H W C
+                v = videos.tensors.permute((0, 2, 3, 1))[action_idx].detach().cpu()  # T C H W >> T H W C
                 target_bboxs = targets[0]["boxs"].bbox[:8].detach().cpu()
                 predicted_bboxs = outputs["pred_boxes"][action_idx].detach().cpu()
                 fig, axes = plt.subplots(2, 4, figsize=(19.2, 10.8), layout="constrained")
                 for i, ax in enumerate(axes.flat):
                     if i == len(v):
                         break
+
                     def norm(x):
-                        return (x+2.117904)/4.758
+                        return (x + 2.117904) / 4.758
+
                     # normalizedv = (v[i]+2.117904)/4.757904
                     ax.imshow(norm(v[i]))
                     ax.set_title(texts[0])
-                    
-                    x, y, width, height = target_bboxs[i]*255
-                    patch = patches.Rectangle((x-(width/2), y-(height/2)), width, height, linewidth=2, edgecolor='red', facecolor='none')
-                    ax.add_patch(patch) # target bbox
+
+                    x, y, width, height = target_bboxs[i]
+
+                    #scaling to the new image size
+                    x = x * targets[0]['img_size'][1]
+                    y = y * targets[0]['img_size'][0]
+                    width = width * targets[0]['img_size'][1]
+                    height = height * targets[0]['img_size'][0]
+
+                    patch = patches.Rectangle((x - (width / 2), y - (height / 2)), width, height, linewidth=2,
+                                              edgecolor='red', facecolor='none')
+                    ax.add_patch(patch)  # target bbox
                     ax.text(x, y - 5, 'Real', color='red')
-                    
-                    x, y, width, height = predicted_bboxs[i]*255
-                    patch = patches.Rectangle((x-(width/2), y-(height/2)), width, height, linewidth=2, edgecolor='blue', facecolor='none')
-                    ax.add_patch(patch) # predicted bbox
+
+                    x, y, width, height = predicted_bboxs[i]
+
+                    x = x * targets[0]['img_size'][1]
+                    y = y * targets[0]['img_size'][0]
+                    width = width * targets[0]['img_size'][1]
+                    height = height * targets[0]['img_size'][0]
+
+                    patch = patches.Rectangle((x - (width / 2), y - (height / 2)), width, height, linewidth=2,
+                                              edgecolor='blue', facecolor='none')
+                    ax.add_patch(patch)  # predicted bbox
                     ax.text(x, y - 5, 'Pred', color='blue')
+
 
                 fig.savefig(f"{cfg.OUTPUT_DIR}step_{iteration}.png")
                 plt.close(fig)
@@ -146,15 +164,15 @@ def train(cfg, local_rank, distributed, logger):
         # loss used for update param
         # assert set(weight_dict.keys()) == set(loss_dict.keys())
         losses = sum(loss_dict[k] * weight_dict[k] for k in \
-                            loss_dict.keys() if k in weight_dict)
+                     loss_dict.keys() if k in weight_dict)
 
         # reduce losses over all GPUs for logging purposes
         loss_dict_reduced = reduce_loss_dict(loss_dict)
-        loss_dict_reduced_unscaled = {f"{k}_unscaled" : v \
-                        for k, v in loss_dict_reduced.items()}
+        loss_dict_reduced_unscaled = {f"{k}_unscaled": v \
+                                      for k, v in loss_dict_reduced.items()}
         loss_dict_reduced_scaled = {
-            k : v * weight_dict[k] for k, v in loss_dict_reduced.items()\
-                 if k in weight_dict and k in verbose_loss
+            k: v * weight_dict[k] for k, v in loss_dict_reduced.items() \
+            if k in weight_dict and k in verbose_loss
         }
         losses_reduced_scaled = sum(loss_dict_reduced_scaled.values())
         loss_value = losses_reduced_scaled.item()
@@ -183,7 +201,7 @@ def train(cfg, local_rank, distributed, logger):
         if writer is not None and is_main_process() and iteration % 50 == 0:
             for k in loss_dict_reduced_scaled:
                 writer.add_scalar(f"{k}", metric_logger.meters[k].avg, iteration)
-        
+
         if iteration % 50 == 0 or iteration == max_iter:
             logger.info(
                 metric_logger.delimiter.join(
@@ -200,7 +218,7 @@ def train(cfg, local_rank, distributed, logger):
                 ).format(
                     eta=eta_string,
                     iter=iteration,
-                    max_iter = max_iter,
+                    max_iter=max_iter,
                     meters=str(metric_logger),
                     lr=optimizer.param_groups[0]["lr"],
                     lr_vis=optimizer.param_groups[1]["lr"],
@@ -212,7 +230,7 @@ def train(cfg, local_rank, distributed, logger):
 
         if iteration % checkpoint_period == 0:
             checkpointer.save("model_{:06d}".format(iteration), **arguments)
-            
+
         if iteration == max_iter:
             checkpointer.save("model_final", **arguments)
 
@@ -236,7 +254,7 @@ def run_eval(cfg, model, model_ema, logger, val_data_loader, device, writer, ite
     logger.info("Start validating")
     test_model = model_ema if model_ema is not None else model
     evaluator = build_evaluator(cfg, logger, mode='val' \
-        if cfg.DATASET.NAME == "VidSTG" else "test",)   # mode = ['val','test']
+        if cfg.DATASET.NAME == "VidSTG" else "test", )  # mode = ['val','test']
     postprocessor = build_postprocessors()
     torch.cuda.empty_cache()
     do_eval(
@@ -259,7 +277,7 @@ def run_test(cfg, model, model_ema, logger, distributed):
     test_model = model_ema if model_ema is not None else model
     torch.cuda.empty_cache()
 
-    evaluator = build_evaluator(cfg, logger, mode='test')   # mode = ['val','test']
+    evaluator = build_evaluator(cfg, logger, mode='test')  # mode = ['val','test']
     postprocessor = build_postprocessors()
     val_data_loader = make_data_loader(cfg, mode='test', is_distributed=distributed)
     do_eval(
@@ -318,7 +336,7 @@ def main():
 
     if args.config_file:
         cfg.merge_from_file(args.config_file)
-        
+
     cfg.merge_from_list(args.opts)
     cfg.freeze()
 
@@ -326,9 +344,9 @@ def main():
         cudnn.benchmark = False
         cudnn.deterministic = True
         set_seed(args.seed + get_rank())
-    
+
     synchronize()
-    
+
     output_dir = cfg.OUTPUT_DIR
     if output_dir:
         mkdir(output_dir)
@@ -336,10 +354,10 @@ def main():
     logger = setup_logger("Video Grounding", output_dir, get_rank())
     logger.info("Using {} GPUs".format(num_gpus))
     logger.info(args)
-    
+
     if args.config_file:
         logger.info("Loaded configuration file {}".format(args.config_file))
-    
+
     logger.info("Running with config:\n{}".format(cfg))
 
     output_config_path = os.path.join(cfg.OUTPUT_DIR, 'config.yml')
@@ -349,7 +367,7 @@ def main():
     os.environ["TOKENIZERS_PARALLELISM"] = "false"
 
     model, model_ema = train(cfg, args.local_rank, args.distributed, logger)
-    
+
     if not args.skip_test:
         run_test(cfg, model, model_ema, logger, args.distributed)
 
