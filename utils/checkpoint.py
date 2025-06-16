@@ -43,6 +43,8 @@ class VSTGCheckpointer(object):
         self.save_to_disk = save_to_disk
         self.logger = logger
         self.is_train = is_train
+        self.paths = []
+        self.PATH_CAP = 2
 
     def save(self, name, **kwargs):
         if not self.save_dir:
@@ -64,6 +66,10 @@ class VSTGCheckpointer(object):
         torch.save(data, save_file)
         
         self.tag_last_checkpoint(save_file)
+        
+        if len(self.paths) == self.PATH_CAP:
+            os.remove(self.paths.pop())
+        self.paths.append(save_file)
 
     def load(self, f=None, with_optim=True, load_mapping={}):
         if self.has_checkpoint() and self.is_train:
