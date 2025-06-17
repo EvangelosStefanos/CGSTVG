@@ -19,6 +19,7 @@ from utils.comm import is_main_process
 
 
 def modality_concatenation(self, feat_2d, feat_motion, feat_text, feat_temporal):
+    T, B, E = feat_2d.shape
     # plot means-stds #
     STEPS_PER_EPOCH = 40338 # 2 gpus
     if is_main_process() and self.steps % STEPS_PER_EPOCH < 10:
@@ -52,27 +53,63 @@ def modality_concatenation(self, feat_2d, feat_motion, feat_text, feat_temporal)
             fig.savefig(f"{self.cfg.OUTPUT_DIR}mean-std_{self.steps}.png")
             plt.close(fig)
     
-    frame_length = feat_2d.size(0)
-    feat_text = feat_text.expand(feat_text.size(0), frame_length, feat_text.size(-1))
+    # frame_length = feat_2d.size(0)
+    # feat_text = feat_text.expand(feat_text.size(0), frame_length, feat_text.size(-1)) # [W, B, E] >> [W, T, E]
     
     # clamp here if needed
-    feat_2d = feat_2d.clamp(min=-1,max=1)
-    feat_motion = feat_motion.clamp(min=-1,max=1)
-    feat_text = feat_text.clamp(min=-1,max=1)
-    feat_temporal = feat_temporal.clamp(min=-1,max=1)
+    # feat_2d = feat_2d.clamp(min=-1, max=1)
+    # feat_motion = feat_motion.clamp(min=-1, max=1)
+    # feat_text = feat_text.clamp(min=-1, max=1)
+    # feat_temporal = feat_temporal.clamp(min=-1, max=1)
     
     # concat visual and text features and Pad the vis_pos with 0 for the text tokens
-    concat_features = torch.cat([feat_2d.permute(1,0,2), feat_text, feat_motion.permute(1,0,2)], dim=0)
+    # concat_features = torch.cat([feat_2d.permute(1,0,2), feat_text, feat_motion.permute(1,0,2)], dim=0) # [B, T, E] + [B, T, E] + [W, T, E] >> [W+2, T, E]
+    concat_features = (feat_2d.unsqueeze(1) * feat_text.unsqueeze(0).expand(T, -1, -1, -1) * feat_motion.unsqueeze(1)).mean(1)
+
+    # TSNE START #
+    # STEPS_PER_EPOCH = 40338 # 2 gpus
+    # if is_main_process() and self.steps % STEPS_PER_EPOCH < 10:
+    #     with torch.no_grad():
+    #         W, T, E = feat_text.shape
+    #         X = concat_features.reshape(shape=((W+2)*T, E)).detach().cpu()
+    #         (fig, subplots) = plt.subplots(2, 2, figsize=(19.2, 10.8), subplot_kw=dict(projection='3d'), layout="constrained")
+    #         perplexities = [5, 30, 50, 100]
+    #         for i, ax in enumerate(subplots.flat):
+    #             tsne = TSNE(
+    #                 n_components=3,
+    #                 init="random",
+    #                 random_state=0,
+    #                 perplexity=perplexities[i],
+    #                 max_iter=300,
+    #             )
+    #             Y = tsne.fit_transform(X)
+    #             ax.set_title("Perplexity=%d" % perplexities[i])
+
+    #             p = Y[0*T:1*T]
+    #             ax.scatter(p[:, 0], p[:, 1], p[:, 2], c="r", label="image")
+                
+    #             p = Y[1*T:13*T]
+    #             ax.scatter(p[:, 0], p[:, 1], p[:, 2], c="g", label="text")
+                
+    #             p = Y[13*T:14*T]
+    #             ax.scatter(p[:, 0], p[:, 1], p[:, 2], c="b", label="motion")
+
+    #             ax.legend()
+    #         fig.savefig(f"{self.cfg.OUTPUT_DIR}tsne_{self.steps}.png")
+    #         plt.close(fig)
+    # self.steps += 1
+    # TSNE STOP #
 
     # TSNE START #
     STEPS_PER_EPOCH = 40338 # 2 gpus
     if is_main_process() and self.steps % STEPS_PER_EPOCH < 10:
         with torch.no_grad():
-            W, T, E = feat_text.shape
-            X = concat_features.reshape(shape=((W+2)*T, E)).detach().cpu()
+            X = concat_features.squeeze(1).detach().cpu()
             (fig, subplots) = plt.subplots(2, 2, figsize=(19.2, 10.8), subplot_kw=dict(projection='3d'), layout="constrained")
             perplexities = [5, 30, 50, 100]
             for i, ax in enumerate(subplots.flat):
+                if perplexities[i] >= X.shape[0]:
+                    break
                 tsne = TSNE(
                     n_components=3,
                     init="random",
@@ -82,36 +119,43 @@ def modality_concatenation(self, feat_2d, feat_motion, feat_text, feat_temporal)
                 )
                 Y = tsne.fit_transform(X)
                 ax.set_title("Perplexity=%d" % perplexities[i])
-
-                p = Y[0*T:1*T]
-                ax.scatter(p[:, 0], p[:, 1], p[:, 2], c="r", label="image")
-                
-                p = Y[1*T:13*T]
-                ax.scatter(p[:, 0], p[:, 1], p[:, 2], c="g", label="text")
-                
-                p = Y[13*T:14*T]
-                ax.scatter(p[:, 0], p[:, 1], p[:, 2], c="b", label="motion")
-
+                ax.scatter(Y[:, 0], Y[:, 1], Y[:, 2], c="r", label="fusion")
                 ax.legend()
             fig.savefig(f"{self.cfg.OUTPUT_DIR}tsne_{self.steps}.png")
             plt.close(fig)
     self.steps += 1
     # TSNE STOP #
+    
+    # post fusion decoding # [(W+2)*Τ, Β, Ε] -> [(W+2)*Τ, Β, Ε]
+    tgt = torch.zeros(T, B, E).to(self.device) # [T, B, E]
+    tgt_pos = self.tgt_embed(T).to(self.device) # [T, B, E]
+    # mask_motion = self.post_fusion_embed(concat_features.reshape((-1, 1, self.d_model))) # [W+2, T, E] >> [(W+2)*T, 1, E]
+    # mask_motion = concat_features.reshape((-1, B, E)) # [W+2, T, E] >> [(W+2)*T, 1, E]
+    mask_motion = concat_features # [T, B, E]
+    motion_pos = torch.unsqueeze(torch.permute(mask_motion, (0, 2, 1)), -1) # [T, B, E] >> [T, E, B, 1]
+    mask_pos = torch.unsqueeze(torch.zeros(motion_pos.size()[0], motion_pos.size()[2], dtype=torch.bool), -1).to(self.device) # [T, 1, 1]
+    encoder_pos_motion = torch.squeeze(torch.permute(self.position_embedding(motion_pos, mask_pos), (0, 2, 1, 3)), 3) # [T, E, B, 1] >> [T, B, E]    
+    frames_cls = self.post_fusion_decoder(
+        tgt=tgt+tgt_pos,
+        tgt_mask=nn.Transformer.generate_square_subsequent_mask(tgt.size(0)).to(self.device),
+        memory=mask_motion + encoder_pos_motion,
+    )
+    videos_cls = frames_cls
+    if self.cfg.MODEL.TEMPORAL_BRANCH == 'a':
+        videos_cls = frames_cls * feat_temporal
 
     #vis_pos = torch.cat([pos_motion, torch.zeros_like(text_features), pos_rgb], dim=0)
-    frames_cls = torch.mean(concat_features, dim=0)
+    # frames_cls = torch.mean(concat_features, dim=0) # [W+2, T, E] >> [T, E]
 
-    if self.cfg.MODEL.TEMPORAL_BRANCH == 'a':
-        videos_cls=torch.mean(feat_temporal, dim=0).squeeze()
-    else:
-        videos_cls = torch.mean(frames_cls, dim=0)
+    # if self.cfg.MODEL.TEMPORAL_BRANCH == 'a':
+    #     videos_cls = torch.mean(feat_temporal, dim=0).squeeze() # [T, B, E] >> [E]
+    # else:
+    #     videos_cls = torch.mean(frames_cls, dim=0) # [T, E] >> [E]
 
 
-    pos_query, content_query = self.pos_fc(frames_cls), self.time_fc(videos_cls)
-    pos_query = pos_query.sigmoid()  # [n_frames, bs, 4]
-    content_query = content_query.expand(feat_2d.size(0), content_query.size(-1)).unsqueeze(
-        1)  # [n_frames, bs, d_model]
-    conf_query = self.conf(pos_query).sigmoid().squeeze()
+    pos_query = self.pos_fc(frames_cls).sigmoid() # [n_frames, bs, 4] # [T, B, E] >> [T, B, 4]
+    content_query = self.time_fc(videos_cls)  # [n_frames, bs, d_model] # [T, B, E] >> [T, B, E]
+    conf_query = self.conf(pos_query).sigmoid() # [T, B, 4] >> [T, B, 1]
     return pos_query, content_query, conf_query
 
 
@@ -217,6 +261,11 @@ class CGSTVG(nn.Module):
 
         decoder_layer_text = nn.TransformerDecoderLayer(d_model=hidden_dim, nhead=cfg.MODEL.CG.HEADS)
         self.decoder_text = nn.TransformerDecoder(decoder_layer_text, num_layers=cfg.MODEL.CG.DEC_LAYERS)
+        
+        # post fusion decoder #
+        # self.post_fusion_embed = nn.Linear(self.vjepa_config.num_classes_img, hidden_dim, bias=True)
+        decoder_layer = nn.TransformerDecoderLayer(d_model=hidden_dim, nhead=cfg.MODEL.CG.HEADS)
+        self.post_fusion_decoder = nn.TransformerDecoder(decoder_layer, num_layers=cfg.MODEL.CG.DEC_LAYERS)
 
 
         ##temporal decoder
@@ -313,24 +362,24 @@ class CGSTVG(nn.Module):
                 mask_motion = torch.unsqueeze(torch.permute(mask_motion, (1, 0)), 1)
                 mask_rgb = torch.unsqueeze(torch.permute(mask_rgb, (1, 0)), 1)
             else:
-                mask_motion = torch.permute(outputs_motion[0], (1, 0, 2))
-                mask_rgb = torch.permute(outputs_2d[0], (1, 0, 2))
+                mask_motion = torch.permute(outputs_motion[0], (1, 0, 2)) # [...] >> [T, B, F1]
+                mask_rgb = torch.permute(outputs_2d[0], (1, 0, 2)) # [...] >> [T, B, F2]
 
-            mask_motion = self.mask_motion_embed(mask_motion)
-            mask_rgb = self.mask_rgb_embed(mask_rgb)
+            mask_motion = self.mask_motion_embed(mask_motion) # [T, B, F1] >> [T, B, E]
+            mask_rgb = self.mask_rgb_embed(mask_rgb) # [T, B, F2] >> [T, B, E]
 
             ###mask position embeddings
-            motion_pos = torch.unsqueeze(torch.permute(mask_motion, (0, 2, 1)), -1)
-            rgb_pos = torch.unsqueeze(torch.permute(mask_rgb, (0, 2, 1)), -1)
-            mask_pos = torch.unsqueeze(torch.zeros(motion_pos.size()[0], motion_pos.size()[2], dtype=torch.bool), -1).to(self.device)
-            encoder_pos_motion = self.position_embedding(motion_pos, mask_pos)
-            encoder_pos_rgb = self.position_embedding(rgb_pos, mask_pos)
-            encoder_pos_motion = torch.squeeze(torch.permute(encoder_pos_motion, (0, 2, 1, 3)), 3)
-            encoder_pos_rgb = torch.squeeze(torch.permute(encoder_pos_rgb, (0, 2, 1, 3)), 3)
+            motion_pos = torch.unsqueeze(torch.permute(mask_motion, (0, 2, 1)), -1) # [T, B, E] >> [T, E, 1, 1]
+            rgb_pos = torch.unsqueeze(torch.permute(mask_rgb, (0, 2, 1)), -1) # [T, B, E] >> [T, E, 1, 1]
+            mask_pos = torch.unsqueeze(torch.zeros(motion_pos.size()[0], motion_pos.size()[2], dtype=torch.bool), -1).to(self.device) # [T, 1, 1]
+            encoder_pos_motion = self.position_embedding(motion_pos, mask_pos) # [T, E, 1, 1]
+            encoder_pos_rgb = self.position_embedding(rgb_pos, mask_pos) # [T, E, 1, 1]
+            encoder_pos_motion = torch.squeeze(torch.permute(encoder_pos_motion, (0, 2, 1, 3)), 3) # [T, E, 1, 1] >> [T, B, E]
+            encoder_pos_rgb = torch.squeeze(torch.permute(encoder_pos_rgb, (0, 2, 1, 3)), 3) # [T, E, 1, 1] >> [T, B, E]
 
             ####tgt input and positional encoding
-            tgt = torch.zeros(self.FRAMES_PER_SAMPLE, self.B, self.d_model).to(self.device)
-            tgt_pos = self.tgt_embed(self.FRAMES_PER_SAMPLE).to(self.device)
+            tgt = torch.zeros(self.FRAMES_PER_SAMPLE, self.B, self.d_model).to(self.device) # [T, B, E]
+            tgt_pos = self.tgt_embed(self.FRAMES_PER_SAMPLE).to(self.device) # [T, B, E]
 
             ##decoder masks
             tgt_mask_visual = nn.Transformer.generate_square_subsequent_mask(tgt.size(0)).to(self.device)
@@ -410,8 +459,11 @@ class CGSTVG(nn.Module):
 
 
             NUM_LAYERS = 1
-            pos_query = pos_query.reshape(shape=(NUM_LAYERS, pos_query.size(0), 4))  # [FRAMES_PER_SAMPLE, 4] -> [NUM_LAYERS, FRAMES_PER_SAMPLE, 4]
-            conf_query = conf_query.reshape(shape=(NUM_LAYERS, conf_query.size(0)))  # [FRAMES_PER_SAMPLE] -> [NUM_LAYERS, FRAMES_PER_SAMPLE]
+            # pos_query = pos_query.reshape(shape=(NUM_LAYERS, pos_query.size(0), 4))  # [FRAMES_PER_SAMPLE, 4] -> [NUM_LAYERS, FRAMES_PER_SAMPLE, 4]
+            # conf_query = conf_query.reshape(shape=(NUM_LAYERS, conf_query.size(0)))  # [FRAMES_PER_SAMPLE] -> [NUM_LAYERS, FRAMES_PER_SAMPLE]
+            pos_query = pos_query.permute((1, 0, 2)) # [T, B, 4] >> [B, T, 4]
+            conf_query = conf_query.permute((1, 0, 2)).squeeze(-1) # [T, B, 1] >> [B, T, 1] >> [B, T]
+            time_query = time_query.permute((1, 0, 2)).unsqueeze(0) # [T, B, E] >> [B, T, E] >> [1, B, T, E]
 
             out = {}
 
@@ -425,15 +477,14 @@ class CGSTVG(nn.Module):
 
             #######  predict the start and end probability #######
             time_hiden_state = time_query
-            outputs_time = self.temp_embed(time_hiden_state)  # [num_layers, b, T, 2]
-            outputs_time = outputs_time.permute(dims=(1, 0, 2))
-            outputs_time = outputs_time.reshape(shape=(NUM_LAYERS, self.B, time_query.size(0), 2))  # [B, FRAMES_PER_SAMPLE, 2] -> [NUM_LAYERS, B, FRAMES_PER_SAMPLE, 2]
+            outputs_time = self.temp_embed(time_hiden_state)  # [num_layers, b, T, 2] # [1, B, T, E] >> [1, B, T, 2]
+            # outputs_time = outputs_time.permute(dims=(1, 0, 2)) # [T, B, 2] >> [B, T, 2]
+            # outputs_time = outputs_time.reshape(shape=(NUM_LAYERS, self.B, time_query.size(0), 2))  # [B, FRAMES_PER_SAMPLE, 2] -> [NUM_LAYERS, B, FRAMES_PER_SAMPLE, 2]
             out.update({"pred_sted": outputs_time[-1]})
             #######################################################
 
             if self.use_actioness:
-                outputs_actioness = self.action_embed(time_hiden_state).reshape(
-                    shape=(-1, self.B, time_query.size(0), 1))  # [num_layers, b, FRAMES_PER_SAMPLE, 1]
+                outputs_actioness = self.action_embed(time_hiden_state)  # [num_layers, b, FRAMES_PER_SAMPLE, 1] # [1, B, T, E] >> [1, B, T, 1]
                 out.update({"pred_actioness": outputs_actioness[-1]})
 
             if self.use_aux_loss:
