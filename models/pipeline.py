@@ -116,7 +116,7 @@ def modality_concatenation(self, feat_2d, feat_motion, feat_text, feat_temporal)
 
 
     #vis_pos = torch.cat([pos_motion, torch.zeros_like(text_features), pos_rgb], dim=0)
-    frames_cls = torch.mean(concat_features, dim=0)
+    frames_cls = torch.mean(frames_cls, dim=0)
 
     if self.cfg.MODEL.TEMPORAL_BRANCH == 'a':
         videos_cls=torch.mean(feat_temporal, dim=0).squeeze()
