@@ -19,6 +19,8 @@ from utils.comm import is_main_process
 
 
 def modality_concatenation(self, feat_2d, feat_motion, feat_text, feat_temporal):
+    T, B, E = feat_2d.shape
+    W = feat_text.shape[0]
     # plot means-stds #
     STEPS_PER_EPOCH = 40338 # 2 gpus
     if is_main_process() and self.steps % STEPS_PER_EPOCH < 10:
@@ -97,6 +99,21 @@ def modality_concatenation(self, feat_2d, feat_motion, feat_text, feat_temporal)
             plt.close(fig)
     self.steps += 1
     # TSNE STOP #
+    
+    # post fusion decoding # [(W+2)*Τ, Β, Ε] -> [(W+2)*Τ, Β, Ε]
+    TT = (W+2)*T
+    tgt = torch.zeros(TT, B, E).to(self.device) # [TT, B, E]
+    tgt_pos = self.post_fusion_tgt_embed(TT).to(self.device) # [TT, B, E]
+    mask_motion = concat_features.reshape((-1, B, E)) # [W+2, T, E] >> [TT, 1, E]
+    motion_pos = torch.unsqueeze(torch.permute(mask_motion, (0, 2, 1)), -1) # [TT, B, E] >> [TT, E, B, 1]
+    mask_pos = torch.unsqueeze(torch.zeros(motion_pos.size()[0], motion_pos.size()[2], dtype=torch.bool), -1).to(self.device) # [TT, 1, 1]
+    encoder_pos_motion = torch.squeeze(torch.permute(self.position_embedding(motion_pos, mask_pos), (0, 2, 1, 3)), 3) # [TT, E, B, 1] >> [TT, B, E]    
+    frames_cls = self.post_fusion_decoder(
+        tgt=tgt+tgt_pos,
+        tgt_mask=nn.Transformer.generate_square_subsequent_mask(tgt.size(0)).to(self.device),
+        memory=mask_motion + encoder_pos_motion,
+    ).reshape((W+2, T, E))
+
 
     #vis_pos = torch.cat([pos_motion, torch.zeros_like(text_features), pos_rgb], dim=0)
     frames_cls = torch.mean(concat_features, dim=0)
@@ -218,6 +235,10 @@ class CGSTVG(nn.Module):
         decoder_layer_text = nn.TransformerDecoderLayer(d_model=hidden_dim, nhead=cfg.MODEL.CG.HEADS)
         self.decoder_text = nn.TransformerDecoder(decoder_layer_text, num_layers=cfg.MODEL.CG.DEC_LAYERS)
 
+        max_sentence_length = 30
+        self.post_fusion_tgt_embed = SeqEmbeddingSine(max_sentence_length * self.FRAMES_PER_SAMPLE + 1, hidden_dim)
+        decoder_layer = nn.TransformerDecoderLayer(d_model=hidden_dim, nhead=cfg.MODEL.CG.HEADS)
+        self.post_fusion_decoder = nn.TransformerDecoder(decoder_layer, num_layers=cfg.MODEL.CG.DEC_LAYERS)
 
         ##temporal decoder
         if self.cfg.MODEL.TEMPORAL_BRANCH == 'a':
