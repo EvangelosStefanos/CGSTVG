@@ -17,6 +17,87 @@ from sklearn.manifold import TSNE
 import matplotlib.pyplot as plt
 from utils.comm import is_main_process
 
+class EvCapAttention(nn.Module):
+    def __init__(self, v_dim, elem_dim, hidden_dim, attn_dim):
+        super().__init__()
+        # Element-aware attention
+        self.W_v = nn.Linear(v_dim, attn_dim)
+        self.W_p = nn.Linear(elem_dim, attn_dim)
+        self.W_s = nn.Linear(attn_dim, 1)
+
+        # Decoder-guided attention
+        self.W_h = nn.Linear(hidden_dim, attn_dim)
+        self.W_v_prime = nn.Linear(v_dim + elem_dim, attn_dim)
+        self.W_d = nn.Linear(attn_dim, 1)
+
+        self.sigmoid = nn.Sigmoid()
+
+    def forward(self, V, P, H):
+        """
+        Args:
+            V: visual features (B, R, v_dim)
+            P: element features (B, elem_dim)
+            H: decoder hidden state (B, hidden_dim)
+        Returns:
+            V_hat: attended context vector (B, v_dim + elem_dim)
+        """
+        B, R, _ = V.shape
+
+        # === Step 1: Element-aware attention ===
+        V_proj = self.W_v(V)                          # (B, R, attn_dim)
+        P_proj = self.W_p(P).unsqueeze(1)             # (B, 1, attn_dim)
+        alpha = self.W_s*(self.sigmoid(V_proj + P_proj)).squeeze(-1)  # (B, R)
+        #alpha = F.softmax(alpha, dim=1)
+        V_att = torch.bmm(alpha.unsqueeze(1), V).squeeze(1)  # (B, v_dim)
+        V_prime = torch.cat([V_att, P], dim=-1)             # (B, v_dim + elem_dim)
+
+        # === Step 2: Decoder-guided attention ===
+        # Repeat V′ across regions (optional — depends on use case)
+        V_prime_seq = V_prime.unsqueeze(1).repeat(1, R, 1)  # (B, R, v_dim + elem_dim)
+        H_expanded = H.unsqueeze(1).expand(-1, R, -1)       # (B, R, hidden_dim)
+
+        h_proj = self.W_h(H_expanded)
+        v_proj = self.W_v_prime(V_prime_seq)
+        beta = self.W_d*(self.sigmoid(h_proj + v_proj)).squeeze(-1)
+        #beta = F.softmax(beta, dim=1)
+
+        V_hat = torch.bmm(beta.unsqueeze(1), V_prime_seq).squeeze(1)  # (B, v_dim + elem_dim)
+
+        return V_hat
+
+    def forward(self, H, V_prime):
+        """
+        Args:
+            H: Decoder hidden state, shape (batch_size, hidden_dim)
+            V_prime: Attended visual features, shape (batch_size, num_regions, v_dim)
+        Returns:
+            V_hat: Final attended visual vector, shape (batch_size, v_dim)
+        """
+        batch_size, num_regions, v_dim = V_prime.shape
+
+        # Expand H to (batch_size, num_regions, hidden_dim)
+        H_expanded = H.unsqueeze(1).expand(-1, num_regions, -1)
+
+        # Linear projections
+        h_proj = self.W_h(H_expanded)        # (batch_size, num_regions, attn_dim)
+        v_proj = self.W_v(V_prime)           # (batch_size, num_regions, attn_dim)
+
+        # Combine and apply sigmoid
+        combined = self.sigmoid(h_proj + v_proj)  # (batch_size, num_regions, attn_dim)
+
+        # Project to scalar attention weights
+        beta = self.W_d(combined).squeeze(-1)     # (batch_size, num_regions)
+
+        # Normalize with softmax
+        alpha = F.softmax(beta, dim=1)            # (batch_size, num_regions)
+
+        # Weighted sum of V_prime
+        V_hat = torch.bmm(alpha.unsqueeze(1), V_prime).squeeze(1)  # (batch_size, v_dim)
+
+        return V_hat
+
+
+
 
 def modality_concatenation(self, feat_2d, feat_motion, feat_text, feat_temporal):
     T, B, E = feat_2d.shape
@@ -117,15 +198,15 @@ def modality_concatenation(self, feat_2d, feat_motion, feat_text, feat_temporal)
     motion_pos = torch.unsqueeze(torch.permute(mask_motion, (0, 2, 1)), -1) # [TT, B, E] >> [TT, E, B, 1]
     mask_pos = torch.unsqueeze(torch.zeros(motion_pos.size()[0], motion_pos.size()[2], dtype=torch.bool), -1).to(self.device) # [TT, 1, 1]
     encoder_pos_motion = torch.squeeze(torch.permute(self.position_embedding(motion_pos, mask_pos), (0, 2, 1, 3)), 3) # [TT, E, B, 1] >> [TT, B, E]
-    frames_cls = self.post_fusion_decoder(
-        tgt=tgt+tgt_pos,
-        tgt_mask=nn.Transformer.generate_square_subsequent_mask(tgt.size(0)).to(self.device),
-        memory=mask_motion + encoder_pos_motion,
-    ).reshape((W+2, T, E))
+    # frames_cls = self.post_fusion_decoder(
+    #     tgt=tgt+tgt_pos,
+    #     tgt_mask=nn.Transformer.generate_square_subsequent_mask(tgt.size(0)).to(self.device),
+    #     memory=mask_motion + encoder_pos_motion,
+    # ).reshape((W+2, T, E))
 
 
     #vis_pos = torch.cat([pos_motion, torch.zeros_like(text_features), pos_rgb], dim=0)
-    frames_cls = torch.mean(frames_cls, dim=0)
+    frames_cls = torch.mean(concat_features, dim=0)
 
     if self.cfg.MODEL.TEMPORAL_BRANCH == 'a':
         videos_cls=torch.mean(feat_temporal, dim=0).squeeze()
