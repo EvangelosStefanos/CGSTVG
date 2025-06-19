@@ -21,7 +21,7 @@ from utils.comm import is_main_process
 def modality_concatenation(self, feat_2d, feat_motion, feat_text, feat_temporal):
     T, B, E = feat_2d.shape
     W = feat_text.shape[0]
-    # plot means-stds #
+    #plot means-stds #
     STEPS_PER_EPOCH = 40338 # 2 gpus
     if is_main_process() and self.steps % STEPS_PER_EPOCH < 10:
         with torch.no_grad():
@@ -50,21 +50,30 @@ def modality_concatenation(self, feat_2d, feat_motion, feat_text, feat_temporal)
                         std = std.flatten()
                         # ax.scatter(x, mean, s=100*std, alpha=0.5, c=colors[j], label=labels[j])
                         ax.errorbar(x=j, y=mean, yerr=std, alpha=0.5, linestyle="None", c=colors[j], label=labels[j], fmt="-o")
-                    ax.legend()                    
+                    ax.legend()
             fig.savefig(f"{self.cfg.OUTPUT_DIR}mean-std_{self.steps}.png")
             plt.close(fig)
     
     frame_length = feat_2d.size(0)
     feat_text = feat_text.expand(feat_text.size(0), frame_length, feat_text.size(-1))
-    
-    # clamp here if needed
-    feat_2d = feat_2d.clamp(min=-1,max=1)
-    feat_motion = feat_motion.clamp(min=-1,max=1)
-    feat_text = feat_text.clamp(min=-1,max=1)
-    feat_temporal = feat_temporal.clamp(min=-1,max=1)
+
+    feat_2d=feat_2d.permute(1,0,2)
+    feat_motion=feat_motion.permute(1,0,2)
+
+    if self.cfg.MODEL.NORMALIZATION=='clamp':
+        # clamp here if needed
+        feat_2d = feat_2d.clamp(min=-1,max=1)
+        feat_motion = feat_motion.clamp(min=-1,max=1)
+        feat_text = feat_text.clamp(min=-1,max=1)
+        feat_temporal = feat_temporal.clamp(min=-1,max=1)
+    elif self.cfg.MODEL.NORMALIZATION=='layer':
+        #normalization layer
+        feat_2d = self.layer_norm_2d(feat_2d)
+        feat_motion = self.layer_norm_motion(feat_motion)
+        feat_text = self.layer_norm_2d(feat_text)
     
     # concat visual and text features and Pad the vis_pos with 0 for the text tokens
-    concat_features = torch.cat([feat_2d.permute(1,0,2), feat_text, feat_motion.permute(1,0,2)], dim=0)
+    concat_features = torch.cat([feat_2d, feat_text, feat_motion], dim=0)
 
     # TSNE START #
     STEPS_PER_EPOCH = 40338 # 2 gpus
@@ -80,17 +89,17 @@ def modality_concatenation(self, feat_2d, feat_motion, feat_text, feat_temporal)
                     init="random",
                     random_state=0,
                     perplexity=perplexities[i],
-                    max_iter=300,
+                    n_iter=300,
                 )
                 Y = tsne.fit_transform(X)
                 ax.set_title("Perplexity=%d" % perplexities[i])
 
                 p = Y[0*T:1*T]
                 ax.scatter(p[:, 0], p[:, 1], p[:, 2], c="r", label="image")
-                
+
                 p = Y[1*T:13*T]
                 ax.scatter(p[:, 0], p[:, 1], p[:, 2], c="g", label="text")
-                
+
                 p = Y[13*T:14*T]
                 ax.scatter(p[:, 0], p[:, 1], p[:, 2], c="b", label="motion")
 
@@ -99,15 +108,15 @@ def modality_concatenation(self, feat_2d, feat_motion, feat_text, feat_temporal)
             plt.close(fig)
     self.steps += 1
     # TSNE STOP #
-    
-    # post fusion decoding # [(W+2)*Τ, Β, Ε] -> [(W+2)*Τ, Β, Ε]
+
+    #post fusion decoding # [(W+2)*Τ, Β, Ε] -> [(W+2)*Τ, Β, Ε]
     TT = (W+2)*T
     tgt = torch.zeros(TT, B, E).to(self.device) # [TT, B, E]
     tgt_pos = self.post_fusion_tgt_embed(TT).to(self.device) # [TT, B, E]
     mask_motion = concat_features.reshape((-1, B, E)) # [W+2, T, E] >> [TT, 1, E]
     motion_pos = torch.unsqueeze(torch.permute(mask_motion, (0, 2, 1)), -1) # [TT, B, E] >> [TT, E, B, 1]
     mask_pos = torch.unsqueeze(torch.zeros(motion_pos.size()[0], motion_pos.size()[2], dtype=torch.bool), -1).to(self.device) # [TT, 1, 1]
-    encoder_pos_motion = torch.squeeze(torch.permute(self.position_embedding(motion_pos, mask_pos), (0, 2, 1, 3)), 3) # [TT, E, B, 1] >> [TT, B, E]    
+    encoder_pos_motion = torch.squeeze(torch.permute(self.position_embedding(motion_pos, mask_pos), (0, 2, 1, 3)), 3) # [TT, E, B, 1] >> [TT, B, E]
     frames_cls = self.post_fusion_decoder(
         tgt=tgt+tgt_pos,
         tgt_mask=nn.Transformer.generate_square_subsequent_mask(tgt.size(0)).to(self.device),
@@ -116,7 +125,7 @@ def modality_concatenation(self, feat_2d, feat_motion, feat_text, feat_temporal)
 
 
     #vis_pos = torch.cat([pos_motion, torch.zeros_like(text_features), pos_rgb], dim=0)
-    frames_cls = torch.mean(concat_features, dim=0)
+    frames_cls = torch.mean(frames_cls, dim=0)
 
     if self.cfg.MODEL.TEMPORAL_BRANCH == 'a':
         videos_cls=torch.mean(feat_temporal, dim=0).squeeze()
@@ -170,6 +179,8 @@ class CGSTVG(nn.Module):
         self.steps = 0
 
         self.action_embed = None
+        self.vjepa_config = VJEPAConfig()
+
         if self.use_actioness:
             self.action_embed = MLP(hidden_dim, hidden_dim, 1, 3, dropout=DROPOUT)
 
@@ -178,37 +189,28 @@ class CGSTVG(nn.Module):
         # add the iteration anchor update
         # self.ground_decoder.decoder.bbox_embed = self.bbox_embed
 
-        #### V-JEPA extension ####
-        self.vjepa_config = VJEPAConfig()
-        if self.vjepa_config.use_bfloat16 == True:
-            raise ValueError("bfloat16 is not supported.")
-        self.vjepa_encoder = build_vjepa_encoder(self.vjepa_config)
-        self.FROZEN = True
+        if self.cfg.MODEL.CGSTVG_ENCODERS:
+            self.vid = vidswin_model("video_swin_t_p4w7", "video_swin_t_p4w7_k400_1k")
+            self.vis_encoder = build_vis_encoder(cfg)
 
-        frames_number = 1
-        if self.cfg.MODEL.FRAME_DIMENSION == True:
-            frames_number = self.FRAMES_PER_SAMPLE
+            vis_fea_dim = self.vis_encoder.num_channels
+            self.input_proj = nn.Conv2d(vis_fea_dim, hidden_dim, kernel_size=1)
+            self.input_proj2 = nn.Conv2d(768, hidden_dim, kernel_size=1)
+        else:
 
-        self.vjepa_classifier_motion = build_vjepa_classifier(
-            config=self.vjepa_config,
-            encoder=self.vjepa_encoder,
-            video_data=True,
-            checkpoint_path="model_zoo/vjepa/probes/k400-probe.pth.tar",
-            frozen=self.FROZEN,
-            frames_number=frames_number,
-        )
+            #### V-JEPA extension ####
 
-        self.vjepa_classifier_2d = build_vjepa_classifier(
-            config=self.vjepa_config,
-            encoder=self.vjepa_encoder,
-            video_data=False,
-            checkpoint_path="model_zoo/vjepa/probes/in1k-probe.pth.tar",
-            frozen=self.FROZEN,
-            frames_number=frames_number,
-        )
+            if self.vjepa_config.use_bfloat16 == True:
+                raise ValueError("bfloat16 is not supported.")
+            self.vjepa_encoder = build_vjepa_encoder(self.vjepa_config)
+            self.FROZEN = True
 
-        if self.cfg.MODEL.TEMPORAL_BRANCH=='a':
-            self.vjepa_classifier_temporal = build_vjepa_classifier(
+            if self.cfg.MODEL.FRAME_DIMENSION == True:
+                frames_number = self.FRAMES_PER_SAMPLE
+            else:
+                frames_number=1
+
+            self.vjepa_classifier_motion = build_vjepa_classifier(
                 config=self.vjepa_config,
                 encoder=self.vjepa_encoder,
                 video_data=True,
@@ -216,6 +218,25 @@ class CGSTVG(nn.Module):
                 frozen=self.FROZEN,
                 frames_number=frames_number,
             )
+
+            self.vjepa_classifier_2d = build_vjepa_classifier(
+                config=self.vjepa_config,
+                encoder=self.vjepa_encoder,
+                video_data=False,
+                checkpoint_path="model_zoo/vjepa/probes/in1k-probe.pth.tar",
+                frozen=self.FROZEN,
+                frames_number=frames_number,
+            )
+
+            if self.cfg.MODEL.TEMPORAL_BRANCH=='a':
+                self.vjepa_classifier_temporal = build_vjepa_classifier(
+                    config=self.vjepa_config,
+                    encoder=self.vjepa_encoder,
+                    video_data=True,
+                    checkpoint_path="model_zoo/vjepa/probes/k400-probe.pth.tar",
+                    frozen=self.FROZEN,
+                    frames_number=frames_number,
+                )
 
         if self.cfg.MODEL.FRAME_DIMENSION == False:
             ###embeds
@@ -280,9 +301,22 @@ class CGSTVG(nn.Module):
         ####positional embedding backbone
         self.position_embedding = build_position_encoding(self.cfg)
 
+        if self.cfg.MODEL.NORMALIZATION == 'layer':
+
+            self.layer_norm_2d = nn.LayerNorm(self.d_model)
+            self.layer_norm_motion = nn.LayerNorm(self.d_model)
+            self.layer_norm_text = nn.LayerNorm(self.d_model)
+
+
+
+
+
+
         return
 
     def forward(self, videos, texts, targets, iteration_rate=-1):
+
+
         T, C, H, W = videos.tensors.shape  # T = batch * clips * views_per_clip * frames_per_clip
         frame_ids = torch.tensor(targets[0]["frame_ids"])
 
@@ -297,14 +331,43 @@ class CGSTVG(nn.Module):
         clips = videos.tensors.reshape(shape=(self.B, self.NCLIPS, self.VIEWS_PER_CLIP, self.FRAMES_PER_CLIP, C, H, W))
         clips = clips.permute(dims=(1, 2, 0, 4, 3, 5, 6)) # [B, CLIPS, VIEWS, FRAMES_PER_CLIP, C, H, W] -> [CLIPS, VIEWS, B, C, FRAMES_PER_CLIP, H, W]
         clip_indices = torch.reshape(frame_ids, (self.NCLIPS, self.FRAMES_PER_CLIP))
-        
+
 
         with torch.cuda.amp.autocast(dtype=torch.float16, enabled=self.vjepa_config.use_bfloat16):
-            with torch.no_grad():
-                vjepa_features = self.vjepa_encoder(clips, clip_indices)
 
-            if self.FROZEN:
-                with torch.no_grad():            
+            if self.cfg.MODEL.CGSTVG_ENCODERS:
+
+                ##2d backbone
+                vis_outputs, vis_pos_embed = self.vis_encoder(videos)
+                vis_features, vis_mask, vis_durations = vis_outputs.decompose()
+                vis_features=torch.mean(vis_features,dim=[2,3], keepdim=True)
+                outputs_2d = [torch.squeeze(self.input_proj(vis_features),dim=-1)]
+
+                ###3d backbone
+                vid_features = self.vid(videos.tensors, len(videos.tensors))
+                outputs_motion=torch.mean(vid_features['3'],dim=[2,3], keepdim=True)
+                outputs_motion=[torch.squeeze(self.input_proj2(outputs_motion),dim=-1)]
+
+            else:
+
+                with torch.no_grad():
+                    vjepa_features = self.vjepa_encoder(clips, clip_indices)
+
+                if self.FROZEN:
+                    with torch.no_grad():
+                        if self.vjepa_config.attend_across_segments:
+                            outputs_motion = [self.vjepa_classifier_motion(o) for o in vjepa_features]
+                            outputs_2d = [self.vjepa_classifier_2d(o) for o in vjepa_features]
+                            if self.cfg.MODEL.TEMPORAL_BRANCH == 'a':
+                                outputs_temporal = [self.vjepa_classifier_temporal(o) for o in vjepa_features]
+                        else:
+                            outputs_motion = [[self.vjepa_classifier_motion(ost) for ost in os] for os in
+                                              vjepa_features]
+                            outputs_2d = [[self.vjepa_classifier_2d(ost) for ost in os] for os in vjepa_features]
+                            if self.cfg.MODEL.TEMPORAL_BRANCH == 'a':
+                                outputs_temporal = [[self.vjepa_classifier_temporal(ost) for ost in os] for os in
+                                                    vjepa_features]
+                else:
                     if self.vjepa_config.attend_across_segments:
                         outputs_motion = [self.vjepa_classifier_motion(o) for o in vjepa_features]
                         outputs_2d = [self.vjepa_classifier_2d(o) for o in vjepa_features]
@@ -313,19 +376,13 @@ class CGSTVG(nn.Module):
                     else:
                         outputs_motion = [[self.vjepa_classifier_motion(ost) for ost in os] for os in vjepa_features]
                         outputs_2d = [[self.vjepa_classifier_2d(ost) for ost in os] for os in vjepa_features]
-                        if self.cfg.MODEL.TEMPORAL_BRANCH=='a':
-                            outputs_temporal = [[self.vjepa_classifier_temporal(ost) for ost in os] for os in vjepa_features]
-            else:
-                if self.vjepa_config.attend_across_segments:
-                    outputs_motion = [self.vjepa_classifier_motion(o) for o in vjepa_features]
-                    outputs_2d = [self.vjepa_classifier_2d(o) for o in vjepa_features]
-                    if self.cfg.MODEL.TEMPORAL_BRANCH == 'a':
-                        outputs_temporal = [self.vjepa_classifier_temporal(o) for o in vjepa_features]
-                else:
-                    outputs_motion = [[self.vjepa_classifier_motion(ost) for ost in os] for os in vjepa_features]
-                    outputs_2d = [[self.vjepa_classifier_2d(ost) for ost in os] for os in vjepa_features]
-                    if self.cfg.MODEL.TEMPORAL_BRANCH=='a':
-                        outputs_temporal = [[self.vjepa_classifier_temporal(ost) for ost in os] for os in vjepa_features]
+                        if self.cfg.MODEL.TEMPORAL_BRANCH == 'a':
+                            outputs_temporal = [[self.vjepa_classifier_temporal(ost) for ost in os] for os in
+                                                vjepa_features]
+
+
+
+
 
             ###mask decoder features
             if self.cfg.MODEL.FRAME_DIMENSION == False:
@@ -334,11 +391,16 @@ class CGSTVG(nn.Module):
                 mask_motion = torch.unsqueeze(torch.permute(mask_motion, (1, 0)), 1)
                 mask_rgb = torch.unsqueeze(torch.permute(mask_rgb, (1, 0)), 1)
             else:
-                mask_motion = torch.permute(outputs_motion[0], (1, 0, 2))
-                mask_rgb = torch.permute(outputs_2d[0], (1, 0, 2))
+                if self.cfg.MODEL.CGSTVG_ENCODERS:
+                    mask_motion = torch.permute(outputs_motion[0], (0,2,1))
+                    mask_rgb = torch.permute(outputs_2d[0], (0,2,1))
+                else:
+                    mask_motion = torch.permute(outputs_motion[0], (1, 0, 2))
+                    mask_rgb = torch.permute(outputs_2d[0], (1, 0, 2))
 
-            mask_motion = self.mask_motion_embed(mask_motion)
-            mask_rgb = self.mask_rgb_embed(mask_rgb)
+            if self.cfg.MODEL.CGSTVG_ENCODERS==False:
+                mask_motion = self.mask_motion_embed(mask_motion)
+                mask_rgb = self.mask_rgb_embed(mask_rgb)
 
             ###mask position embeddings
             motion_pos = torch.unsqueeze(torch.permute(mask_motion, (0, 2, 1)), -1)
@@ -368,7 +430,7 @@ class CGSTVG(nn.Module):
                 tgt_mask=tgt_mask_visual,
                 memory_key_padding_mask=memory_key_padding_mask.bool()
             )
-            
+
             output_2d_padded = self.decoder_2d(
                 tgt + tgt_pos,
                 mask_rgb + encoder_pos_rgb,
@@ -416,7 +478,7 @@ class CGSTVG(nn.Module):
                 mask_temporal = self.mask_motion_embed(mask_temporal)
                 temporal_pos = torch.unsqueeze(torch.permute(mask_temporal, (0, 2, 1)), -1)
                 encoder_pos_temporal = self.position_embedding(temporal_pos, mask_pos)
-                
+
                 encoder_pos_temporal = torch.squeeze(torch.permute(encoder_pos_temporal, (0, 2, 1, 3)), 3)
                 output_temporal_padded = self.decoder_temporal(
                     tgt + tgt_pos,

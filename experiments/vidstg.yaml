@@ -10,7 +10,9 @@ INPUT:
 
 MODEL:
   WEIGHT: model_zoo/pretrained_resnet101_checkpoint.pth
-  TEMPORAL_BRANCH: a
+  TEMPORAL_BRANCH: False
+  NORMALIZATION: layer
+  CGSTVG_ENCODERS: True
   FRAME_DIMENSION: True
   VISION_BACKBONE:
     NAME: resnet101

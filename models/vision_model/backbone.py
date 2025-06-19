@@ -154,6 +154,7 @@ class Joiner(nn.Sequential):
         pos = []
         for name, x in xs.items():
             out.append(x)
-            pos.append(self[1](x).to(x.tensors.dtype))
+            #pos.append(self[1](x).to(x.tensors.dtype))
+            pos.append(self[1](x.tensors, x.mask))
 
         return out[-1], pos[-1]
