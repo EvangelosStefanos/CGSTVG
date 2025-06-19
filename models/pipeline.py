@@ -216,7 +216,7 @@ def modality_concatenation(self, feat_2d, feat_motion, feat_text, feat_temporal)
 
     pos_query, content_query = self.pos_fc(frames_cls), self.time_fc(videos_cls)
     pos_query = pos_query.sigmoid()  # [n_frames, bs, 4]
-    content_query = content_query.expand(feat_2d.size(0), content_query.size(-1)).unsqueeze(
+    content_query = content_query.expand(feat_2d.size(1), content_query.size(-1)).unsqueeze(
         1)  # [n_frames, bs, d_model]
     conf_query = self.conf(pos_query).sigmoid().squeeze()
     return pos_query, content_query, conf_query
