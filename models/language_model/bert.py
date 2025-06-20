@@ -42,7 +42,7 @@ class BERT(nn.Module):
 class Roberta(nn.Module):
     def __init__(self, name, outdim, freeze=False) -> None:
         super().__init__()
-        self.body = RobertaModel.from_pretrained("model_zoo/roberta-base/")
+        self.body = RobertaModel.from_pretrained("model_zoo/roberta-base/", output_hidden_states=True)
         self.tokenizer = RobertaTokenizerFast.from_pretrained(pretrained_model_name_or_path='model_zoo/roberta-base/')
 
         if freeze:
@@ -70,8 +70,20 @@ class Roberta(nn.Module):
         # Resize the encoder hidden states to be of the same d_model as the decoder
         text_memory_resized = self.resizer(text_memory)
         text_cls_resized = self.resizer(text_cls)
-        
-        return (text_attention_mask, text_memory_resized, tokenized), text_cls_resized
+
+
+        hidden_states=encoded_text.hidden_states
+        hidden_states_list=[]
+
+        for i in range(len(hidden_states)):
+            hid=hidden_states[i].transpose(0,1)
+            hid=self.resizer(hid)
+            hidden_states_list.append(hid)
+
+
+
+
+        return (text_attention_mask, text_memory_resized, tokenized), text_cls_resized, hidden_states_list
 
 
 class FeatureResizer(nn.Module):
