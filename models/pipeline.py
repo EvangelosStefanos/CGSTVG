@@ -172,18 +172,17 @@ def modality_concatenation(self, feat_2d, feat_motion, feat_text, feat_temporal)
     mask_motion = concat_features.reshape((-1, B, E)) # [W+2, T, E] >> [TT, 1, E]
     motion_pos = torch.unsqueeze(torch.permute(mask_motion, (0, 2, 1)), -1) # [TT, B, E] >> [TT, E, B, 1]
     mask_pos = torch.unsqueeze(torch.zeros(motion_pos.size()[0], motion_pos.size()[2], dtype=torch.bool), -1).to(self.device) # [TT, 1, 1]
-    #encoder_pos_motion = torch.squeeze(torch.permute(self.position_embedding(motion_pos, mask_pos), (0, 2, 1, 3)), 3) # [TT, E, B, 1] >> [TT, B, E]
-    # frames_cls = self.post_fusion_decoder(
-    #     tgt=tgt+tgt_pos,
-    #     tgt_mask=nn.Transformer.generate_square_subsequent_mask(tgt.size(0)).to(self.device),
-    #     memory=mask_motion + encoder_pos_motion,
-    # ).reshape((W+2, T, E))
-    #
-    #
-    # #vis_pos = torch.cat([pos_motion, torch.zeros_like(text_features), pos_rgb], dim=0)
-    # frames_cls = torch.mean(frames_cls, dim=0)
+    encoder_pos_motion = torch.squeeze(torch.permute(self.position_embedding(motion_pos, mask_pos), (0, 2, 1, 3)), 3) # [TT, E, B, 1] >> [TT, B, E]
+    frames_cls = self.post_fusion_decoder(
+        tgt=tgt+tgt_pos,
+        tgt_mask=nn.Transformer.generate_square_subsequent_mask(tgt.size(0)).to(self.device),
+        memory=mask_motion + encoder_pos_motion,
+    ).reshape((W+2, T, E))
 
-    frames_cls = torch.mean(concat_features, dim=0)
+
+    #vis_pos = torch.cat([pos_motion, torch.zeros_like(text_features), pos_rgb], dim=0)
+    frames_cls = torch.mean(frames_cls, dim=0)
+
 
     if self.cfg.MODEL.TEMPORAL_BRANCH == 'a':
         videos_cls=torch.mean(feat_temporal, dim=0).squeeze()
@@ -392,7 +391,7 @@ class CGSTVG(nn.Module):
         clip_indices = torch.reshape(frame_ids, (self.NCLIPS, self.FRAMES_PER_CLIP))
 
 
-        
+
         with torch.cuda.amp.autocast(dtype=torch.float16, enabled=self.vjepa_config.use_bfloat16):
 
             if self.cfg.MODEL.CGSTVG_ENCODERS:
